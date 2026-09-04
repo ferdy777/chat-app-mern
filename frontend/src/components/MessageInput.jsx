@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 
 const TYPING_TIMER_LENGTH = 2000;
 
-const MessageInput = ({ onSend, onTyping, onStopTyping }) => {
+const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
   const [text, setText] = useState("");
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -118,6 +118,7 @@ const MessageInput = ({ onSend, onTyping, onStopTyping }) => {
           type="text"
           value={text}
           onChange={handleChange}
+          onFocus={onFocusInput}
           placeholder="Type a message"
           className="flex-1 min-w-0 bg-secondary text-foreground text-sm rounded-lg px-3 sm:px-4 py-2 sm:py-2.5 outline-none placeholder:text-muted-foreground"
         />

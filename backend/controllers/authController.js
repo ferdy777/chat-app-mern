@@ -15,6 +15,13 @@ const register = async (req, res) => {
       }
     }
 
+    if (process.env.MAX_USERS) {
+      const userCount = await User.countDocuments();
+      if (userCount >= Number(process.env.MAX_USERS)) {
+        return res.status(403).json({ message: "Signups are currently full. Please check back later." });
+      }
+    }
+
     if (password.length < 6) {
       return res.status(400).json({ message: "Password must be at least 6 characters" });
     }

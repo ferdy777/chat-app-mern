@@ -33,6 +33,10 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     .filter((p) => p._id !== authUser._id)
     .map((p) => p._id);
 
+  const scrollToBottom = (behavior = "smooth") => {
+    bottomRef.current?.scrollIntoView({ behavior });
+  };
+
   useEffect(() => {
     const fetchMessages = async () => {
       try {
@@ -136,8 +140,35 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   }, [socket, conversation._id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom();
   }, [messages, isOtherTyping]);
+
+  // Scroll to the last message once the mobile keyboard opens/closes
+  // (visualViewport resizing) and right when the input is focused,
+  // since neither of those triggers the messages/isOtherTyping effect above.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const handleViewportResize = () => {
+      // small delay so it fires after the keyboard has actually resized the layout
+      setTimeout(() => scrollToBottom("auto"), 100);
+    };
+    vv.addEventListener("resize", handleViewportResize);
+    return () => vv.removeEventListener("resize", handleViewportResize);
+  }, []);
+
+  const handleInputFocus = () => {
+    setTimeout(() => scrollToBottom("auto"), 100);
+  };
+
+  const handleSelectConversationScroll = () => {
+    // ensures we land on the last message whenever a new conversation is opened
+    scrollToBottom("auto");
+  };
+
+  useEffect(() => {
+    handleSelectConversationScroll();
+  }, [conversation._id]);
 
   const handleSend = async ({ text, imageBase64 }) => {
     try {
@@ -337,7 +368,12 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
           to send messages.
         </div>
       ) : (
-        <MessageInput onSend={handleSend} onTyping={emitTyping} onStopTyping={emitStopTyping} />
+        <MessageInput
+          onSend={handleSend}
+          onTyping={emitTyping}
+          onStopTyping={emitStopTyping}
+          onFocusInput={handleInputFocus}
+        />
       )}
 
       {showContactProfile && (
