@@ -76,7 +76,10 @@ const MessageInput = ({ onSend, onTyping, onStopTyping }) => {
   };
 
   return (
-    <div className="bg-card border-t border-border px-2 sm:px-4 py-2 sm:py-3 relative">
+    <div
+      className="bg-card border-t border-border px-2 sm:px-4 py-2 sm:py-3 relative shrink-0"
+      style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+    >
       {imagePreview && (
         <div className="relative inline-block mb-2">
           <img src={imagePreview} alt="preview" className="h-24 rounded-md" />
@@ -121,7 +124,7 @@ const MessageInput = ({ onSend, onTyping, onStopTyping }) => {
         <Button
           type="submit"
           size="icon"
-          className="rounded-full shrink-0 h-9 w-9 sm:h-10 sm:w-10"
+          className="rounded-full shrink-0 h-9 w-9 sm:h-10 sm:w-10 mr-0.5 sm:mr-0"
           disabled={!text.trim() && !imagePreview}
         >
           <Send className="h-4 w-4" />

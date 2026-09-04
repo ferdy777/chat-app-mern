@@ -49,7 +49,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     return () => socket?.emit("leaveConversation", conversation._id);
   }, [conversation._id, socket]);
 
-  // Check block status whenever the contact changes
   useEffect(() => {
     if (conversation.isGroup || !otherParticipant) return;
     const checkBlocked = async () => {
@@ -235,8 +234,8 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     : lastSeenText;
 
   return (
-    <div className="w-full sm:flex-1 flex flex-col h-full">
-      <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 bg-card border-b border-border">
+    <div className="w-full sm:flex-1 flex flex-col h-full min-h-0">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 bg-card border-b border-border shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <BsArrowLeft
             className="text-muted-foreground text-xl cursor-pointer sm:hidden shrink-0"
@@ -303,7 +302,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto chat-bg py-3">
+      <div className="flex-1 overflow-y-auto chat-bg py-3 min-h-0">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <MessageCircle className="w-10 h-10 mb-3" />
@@ -330,7 +329,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
       </div>
 
       {isBlocked ? (
-        <div className="bg-card border-t border-border px-4 py-3 text-center text-sm text-muted-foreground">
+        <div className="bg-card border-t border-border px-4 py-3 text-center text-sm text-muted-foreground shrink-0">
           You've blocked {otherParticipant?.fullName}.{" "}
           <button onClick={handleToggleBlock} className="text-primary underline">
             Unblock
@@ -341,7 +340,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         <MessageInput onSend={handleSend} onTyping={emitTyping} onStopTyping={emitStopTyping} />
       )}
 
-            {showContactProfile && (
+      {showContactProfile && (
         <ContactProfileModal
           conversation={conversation}
           currentUserId={authUser._id}

@@ -24,7 +24,6 @@ const ChatPage = () => {
     }
   };
 
-  // Load persisted unread counts once on mount (survives refresh/reopen)
   useEffect(() => {
     const fetchUnreadCounts = async () => {
       try {
@@ -37,7 +36,6 @@ const ChatPage = () => {
     fetchUnreadCounts();
   }, []);
 
-  // Restore the previously open chat once conversations have loaded
   useEffect(() => {
     if (selectedConversation || conversations.length === 0) return;
     const savedId = localStorage.getItem(SELECTED_CONVERSATION_KEY);
@@ -50,6 +48,16 @@ const ChatPage = () => {
     if (!socket) return;
 
     const handleNewMessage = (message) => {
+      setConversations((prev) => {
+        const exists = prev.some((c) => c._id === message.conversation);
+        if (!exists) return prev;
+        const updated = prev.map((c) =>
+          c._id === message.conversation ? { ...c, lastMessage: message } : c
+        );
+        const target = updated.find((c) => c._id === message.conversation);
+        return [target, ...updated.filter((c) => c._id !== message.conversation)];
+      });
+
       if (message.sender._id === authUser._id) return;
       if (selectedConversation?._id === message.conversation) return;
 
@@ -65,13 +73,11 @@ const ChatPage = () => {
 
   const handleSelectConversation = (conv) => {
     setSelectedConversation(conv);
-    // Optimistic local clear — ChatWindow's own mount effect calls PUT /messages/read,
-    // which is what actually clears it server-side.
     setUnreadCounts((prev) => ({ ...prev, [conv._id]: 0 }));
   };
 
   return (
-    <div className="h-screen w-screen flex bg-background overflow-hidden">
+    <div className="h-[100svh] w-screen flex bg-background overflow-hidden">
       <Sidebar
         conversations={conversations}
         setConversations={setConversations}
