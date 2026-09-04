@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MessageCircle } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import ChatWindow from "../components/ChatWindow";
@@ -16,6 +16,10 @@ const ChatPage = () => {
   const { socket } = useSocket();
   const { authUser } = useAuth();
 
+  // Tracks whether the currently open chat pushed a history entry, so we
+  // know whether closing it should call history.back() or just clear state.
+  const chatOpenedViaHistory = useRef(false);
+
   useViewportHeight();
 
   const setSelectedConversation = (conv) => {
@@ -27,39 +31,47 @@ const ChatPage = () => {
     }
   };
 
-  // Close chat (not the app) on Escape
+  const handleCloseChat = () => {
+    if (chatOpenedViaHistory.current) {
+      window.history.back();
+    } else {
+      setSelectedConversation(null);
+    }
+  };
+
+  // Close chat (not the app) on Escape — routed through handleCloseChat so
+  // it stays in sync with the back arrow / gesture / hardware back button.
   useEffect(() => {
     if (!selectedConversation) return;
     const handleEsc = (e) => {
-      if (e.key === "Escape") setSelectedConversation(null);
+      if (e.key === "Escape") handleCloseChat();
     };
     window.addEventListener("keydown", handleEsc);
     return () => window.removeEventListener("keydown", handleEsc);
   }, [selectedConversation]);
 
-  // Mobile back button/gesture closes chat (not the app)
+  // Mobile back button/gesture closes chat (not the app).
+  // Only one listener for the lifetime of the page — popstate always means
+  // "the chat's history entry was consumed", so always clear the chat.
   useEffect(() => {
-    if (selectedConversation) {
-      window.history.pushState({ chatOpen: true }, "");
-    }
     const handlePopState = () => {
-      if (selectedConversation) setSelectedConversationState(null);
+      chatOpenedViaHistory.current = false;
+      setSelectedConversation(null);
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [selectedConversation]);
+  }, []);
 
   const handleSelectConversation = (conv) => {
+    // Only push a new history entry when opening a chat from the closed
+    // list view. Switching directly between chats (possible on desktop,
+    // where the sidebar stays visible) should not stack extra entries.
+    if (!selectedConversation) {
+      window.history.pushState({ chatOpen: true }, "");
+      chatOpenedViaHistory.current = true;
+    }
     setSelectedConversation(conv);
     setUnreadCounts((prev) => ({ ...prev, [conv._id]: 0 }));
-  };
-
-  const handleCloseChat = () => {
-    if (window.history.state?.chatOpen) {
-      window.history.back();
-    } else {
-      setSelectedConversation(null);
-    }
   };
 
   useEffect(() => {
@@ -79,7 +91,11 @@ const ChatPage = () => {
     const savedId = localStorage.getItem(SELECTED_CONVERSATION_KEY);
     if (!savedId) return;
     const match = conversations.find((c) => c._id === savedId);
-    if (match) setSelectedConversationState(match);
+    if (match) {
+      window.history.pushState({ chatOpen: true }, "");
+      chatOpenedViaHistory.current = true;
+      setSelectedConversationState(match);
+    }
   }, [conversations, selectedConversation]);
 
   useEffect(() => {
