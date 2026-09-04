@@ -1,0 +1,15 @@
+{
+  "name": "chat-app-mern",
+  "version": "1.0.0",
+  "description": "Full-stack real-time chat application (MERN + Socket.io) inspired by WhatsApp",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
+    "render-build": "npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend",
+    "start": "npm run start --prefix backend"
+  },
+  "license": "MIT"
+}

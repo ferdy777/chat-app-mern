@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* --- shadcn/ui semantic tokens: light theme --- */
+    --background: 210 20% 95%;
+    --foreground: 200 20% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 200 20% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 200 20% 12%;
+
+    --primary: 166 100% 33%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 200 20% 12%;
+
+    --muted: 210 16% 93%;
+    --muted-foreground: 210 10% 40%;
+
+    --accent: 210 16% 93%;
+    --accent-foreground: 200 20% 12%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 15% 88%;
+    --input: 210 15% 88%;
+    --ring: 166 100% 33%;
+
+    --radius: 0.6rem;
+
+    /* --- app-specific (WhatsApp-flavored) tokens: light theme --- */
+    --wa-green: 166 100% 33%;
+    --wa-panel: 0 0% 100%;
+    --wa-panel-light: 210 16% 93%;
+    --wa-bg: 210 20% 95%;
+    --wa-bubble-out: 100 65% 91%;
+    --wa-bubble-in: 0 0% 100%;
+
+    --chat-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d9dee2' fill-opacity='0.5'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  }
+
+  .dark {
+    /* --- shadcn/ui semantic tokens: dark theme --- */
+    --background: 200 22% 7%;
+    --foreground: 210 20% 92%;
+
+    --card: 200 15% 15%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 200 15% 15%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 166 100% 33%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 200 14% 20%;
+    --secondary-foreground: 210 20% 92%;
+
+    --muted: 200 14% 20%;
+    --muted-foreground: 210 10% 65%;
+
+    --accent: 200 14% 20%;
+    --accent-foreground: 210 20% 92%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 200 15% 22%;
+    --input: 200 15% 22%;
+    --ring: 166 100% 33%;
+
+    /* --- app-specific (WhatsApp-flavored) tokens: dark theme --- */
+    --wa-green: 166 100% 33%;
+    --wa-panel: 200 15% 15%;
+    --wa-panel-light: 200 14% 20%;
+    --wa-bg: 200 22% 7%;
+    --wa-bubble-out: 165 100% 18%;
+    --wa-bubble-in: 200 15% 15%;
+
+    --chat-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23182229' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-border;
+  border-radius: 3px;
+}
+
+.chat-bg {
+  background-color: hsl(var(--wa-bg));
+  background-image: var(--chat-pattern);
+  transition: background-color 0.2s ease;
+}

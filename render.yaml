@@ -1,0 +1,37 @@
+# Render Blueprint — deploys ChatApp as a single Node web service.
+# The build step installs both backend & frontend deps and builds the React app;
+# the backend then serves that build + the API + the WebSocket server from one URL.
+#
+# To use: push this repo to GitHub, then in Render click
+# New → Blueprint, and point it at your repo. Render will read this file automatically.
+# You'll still need to fill in MONGO_URI and JWT_SECRET as env vars (marked sync: false
+# below so Render prompts you for them instead of storing them in this file).
+
+services:
+  - type: web
+    name: chat-app
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm run render-build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: CLIENT_URL
+        value: https://chat-app.onrender.com
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
