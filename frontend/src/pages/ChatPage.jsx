@@ -5,6 +5,7 @@ import ChatWindow from "../components/ChatWindow";
 import api from "../utils/axios";
 import { useSocket } from "../context/SocketContext";
 import { useAuth } from "../context/AuthContext";
+import useViewportHeight from "../hooks/useViewportHeight";
 
 const SELECTED_CONVERSATION_KEY = "chatapp:selectedConversationId";
 
@@ -15,12 +16,49 @@ const ChatPage = () => {
   const { socket } = useSocket();
   const { authUser } = useAuth();
 
+  useViewportHeight();
+
   const setSelectedConversation = (conv) => {
     setSelectedConversationState(conv);
     if (conv) {
       localStorage.setItem(SELECTED_CONVERSATION_KEY, conv._id);
     } else {
       localStorage.removeItem(SELECTED_CONVERSATION_KEY);
+    }
+  };
+
+  // Close chat (not the app) on Escape
+  useEffect(() => {
+    if (!selectedConversation) return;
+    const handleEsc = (e) => {
+      if (e.key === "Escape") setSelectedConversation(null);
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [selectedConversation]);
+
+  // Mobile back button/gesture closes chat (not the app)
+  useEffect(() => {
+    if (selectedConversation) {
+      window.history.pushState({ chatOpen: true }, "");
+    }
+    const handlePopState = () => {
+      if (selectedConversation) setSelectedConversationState(null);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [selectedConversation]);
+
+  const handleSelectConversation = (conv) => {
+    setSelectedConversation(conv);
+    setUnreadCounts((prev) => ({ ...prev, [conv._id]: 0 }));
+  };
+
+  const handleCloseChat = () => {
+    if (window.history.state?.chatOpen) {
+      window.history.back();
+    } else {
+      setSelectedConversation(null);
     }
   };
 
@@ -71,13 +109,11 @@ const ChatPage = () => {
     return () => socket.off("newMessage", handleNewMessage);
   }, [socket, selectedConversation, authUser._id]);
 
-  const handleSelectConversation = (conv) => {
-    setSelectedConversation(conv);
-    setUnreadCounts((prev) => ({ ...prev, [conv._id]: 0 }));
-  };
-
   return (
-    <div className="h-[100svh] w-screen flex bg-background overflow-hidden">
+    <div
+      className="w-screen flex bg-background overflow-hidden"
+      style={{ height: "var(--app-height, 100dvh)" }}
+    >
       <Sidebar
         conversations={conversations}
         setConversations={setConversations}
@@ -90,8 +126,8 @@ const ChatPage = () => {
         <ChatWindow
           conversation={selectedConversation}
           setConversations={setConversations}
-          onBack={() => setSelectedConversation(null)}
-          onClose={() => setSelectedConversation(null)}
+          onBack={handleCloseChat}
+          onClose={handleCloseChat}
         />
       ) : (
         <div className="hidden sm:flex flex-1 flex-col items-center justify-center bg-card text-muted-foreground">
