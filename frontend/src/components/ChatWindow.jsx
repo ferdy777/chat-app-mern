@@ -18,12 +18,14 @@ import {
 
 const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const [messages, setMessages] = useState([]);
+  const [loadingMessages, setLoadingMessages] = useState(true);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const [showContactProfile, setShowContactProfile] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const { authUser } = useAuth();
   const { socket, onlineUsers, userStatuses } = useSocket();
   const bottomRef = useRef(null);
+  const messagesContentRef = useRef(null);
 
   const otherParticipant = conversation.isGroup
     ? null
@@ -39,12 +41,15 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
 
   useEffect(() => {
     const fetchMessages = async () => {
+      setLoadingMessages(true);
       try {
         const { data } = await api.get(`/messages/${conversation._id}`);
         setMessages(data);
         markIncomingAsRead(data);
       } catch (err) {
         console.error(err);
+      } finally {
+        setLoadingMessages(false);
       }
     };
     fetchMessages();
@@ -139,13 +144,26 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     };
   }, [socket, conversation._id]);
 
+  // Single source of truth for "stay pinned to the bottom": watch the actual
+  // rendered height of the message list. This fires on new messages, on the
+  // typing indicator appearing/disappearing, AND on late-loading images
+  // resizing the layout (which is what was causing the scroll to land on
+  // the wrong message before) — so we don't need separate effects keyed off
+  // messages/isOtherTyping anymore.
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, isOtherTyping]);
+    const content = messagesContentRef.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      scrollToBottom("auto");
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   // Scroll to the last message once the mobile keyboard opens/closes
-  // (visualViewport resizing) and right when the input is focused,
-  // since neither of those triggers the messages/isOtherTyping effect above.
+  // (visualViewport resizing), since that changes the container's visible
+  // height rather than the content's height and won't trigger the
+  // ResizeObserver above.
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -161,13 +179,9 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     setTimeout(() => scrollToBottom("auto"), 100);
   };
 
-  const handleSelectConversationScroll = () => {
+  useEffect(() => {
     // ensures we land on the last message whenever a new conversation is opened
     scrollToBottom("auto");
-  };
-
-  useEffect(() => {
-    handleSelectConversationScroll();
   }, [conversation._id]);
 
   const handleSend = async ({ text, imageBase64 }) => {
@@ -334,28 +348,30 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto chat-bg py-3 min-h-0">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <MessageCircle className="w-10 h-10 mb-3" />
-            <p className="text-sm">No messages yet. Say hi 👋</p>
-          </div>
-        )}
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg._id}
-            message={msg}
-            isOwn={msg.sender._id === authUser._id}
-            onUpdated={handleMessageUpdated}
-            onDeleted={handleMessageDeletedLocal}
-          />
-        ))}
-        {isOtherTyping && (
-          <div className="px-4 py-1">
-            <div className="bg-wa-bubbleIn text-muted-foreground text-xs inline-block px-3 py-2 rounded-lg">
-              typing...
+        <div ref={messagesContentRef}>
+          {!loadingMessages && messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+              <MessageCircle className="w-10 h-10 mb-3" />
+              <p className="text-sm">No messages yet. Say hi 👋</p>
             </div>
-          </div>
-        )}
+          )}
+          {messages.map((msg) => (
+            <MessageBubble
+              key={msg._id}
+              message={msg}
+              isOwn={msg.sender._id === authUser._id}
+              onUpdated={handleMessageUpdated}
+              onDeleted={handleMessageDeletedLocal}
+            />
+          ))}
+          {isOtherTyping && (
+            <div className="px-4 py-1">
+              <div className="bg-wa-bubbleIn text-muted-foreground text-xs inline-block px-3 py-2 rounded-lg">
+                typing...
+              </div>
+            </div>
+          )}
+        </div>
         <div ref={bottomRef} />
       </div>
 
