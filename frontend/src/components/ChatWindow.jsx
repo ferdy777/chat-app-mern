@@ -42,10 +42,11 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const pageRef = useRef(1);
   const isNearBottomRef = useRef(true);
   const isInitialLoadRef = useRef(true);
-  // True while any message bubble is in edit mode. The edit textarea's
-  // auto-grow resizes the messages container, which would otherwise trip
-  // the ResizeObserver below into scrolling the whole view to the bottom
-  // mid-edit — this flag tells it to sit still instead.
+  // True while any message bubble is in edit mode. Focusing the edit
+  // textarea opens the on-screen keyboard, which fires BOTH a
+  // ResizeObserver resize on the messages container AND a visualViewport
+  // resize event — either of which would otherwise auto-scroll the whole
+  // chat to the bottom mid-edit. This flag makes both skip that.
   const isEditingRef = useRef(false);
 
   const otherParticipant = conversation.isGroup
@@ -274,6 +275,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     const vv = window.visualViewport;
     if (!vv) return;
     const handleViewportResize = () => {
+      if (isEditingRef.current) return;
       setTimeout(() => scrollToBottom("auto"), 100);
     };
     vv.addEventListener("resize", handleViewportResize);
