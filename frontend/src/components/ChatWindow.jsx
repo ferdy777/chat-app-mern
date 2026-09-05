@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
-import { MessageCircle, User, Users, X, ShieldOff, Shield, Trash2, ArrowDown } from "lucide-react";
+import { MessageCircle, User, Users, X, ShieldOff, Shield, Trash2, ArrowDown, Download } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 import api from "../utils/axios";
@@ -17,11 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// How close to the top of the scroll container (in px) triggers loading
-// older messages.
 const LOAD_MORE_THRESHOLD = 80;
-// How far from the bottom (in px) counts as "not at the bottom" — controls
-// both the auto-stick-to-bottom behavior and the floating jump-down button.
 const NEAR_BOTTOM_THRESHOLD = 200;
 
 const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
@@ -34,6 +30,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const [isBlocked, setIsBlocked] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null);
   const [viewingImage, setViewingImage] = useState(null);
+  const [downloading, setDownloading] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [unseenCount, setUnseenCount] = useState(0);
   const { authUser } = useAuth();
@@ -42,12 +39,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const messagesContentRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const pageRef = useRef(1);
-  // Mirrors showScrollToBottom but readable synchronously inside socket
-  // handlers, which close over stale state otherwise.
   const isNearBottomRef = useRef(true);
-  // True only until the very first render of a freshly opened conversation
-  // has settled — used to tell "just opened this chat" apart from "user
-  // scrolled up", since both change scrollHeight.
   const isInitialLoadRef = useRef(true);
 
   const otherParticipant = conversation.isGroup
@@ -132,9 +124,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     }
   };
 
-  // Fetches the next page of OLDER messages and prepends them, keeping the
-  // user's current view pinned to the same message instead of yanking them
-  // to the top or bottom when new content is inserted above.
   const loadOlderMessages = async () => {
     if (loadingOlder || !hasMore) return;
     const container = scrollContainerRef.current;
@@ -193,9 +182,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
       setMessages((prev) => (prev.some((m) => m._id === message._id) ? prev : [...prev, message]));
       if (message.sender._id !== authUser._id) {
         markIncomingAsRead([message]);
-        // If the user is scrolled up reading older messages, don't yank
-        // them down — instead let them know something new arrived via the
-        // floating jump-to-bottom button's badge.
         if (!isNearBottomRef.current) {
           setUnseenCount((prev) => prev + 1);
         }
@@ -261,9 +247,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     };
   }, [socket, conversation._id]);
 
-  // Auto-scroll-to-bottom on new content, but ONLY while we're not in the
-  // middle of loading older history — otherwise this would fight with
-  // loadOlderMessages' own scroll-position restore above.
   useEffect(() => {
     const content = messagesContentRef.current;
     if (!content) return;
@@ -274,8 +257,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         isInitialLoadRef.current = false;
         return;
       }
-      // Only auto-stick to bottom if the user was already near the bottom —
-      // don't yank them down if they're reading older messages further up.
       if (isNearBottomRef.current) scrollToBottom("auto");
     });
     observer.observe(content);
@@ -345,14 +326,45 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     );
   };
 
-  // Scrolls to and briefly highlights a message — used when tapping a
-  // quoted reply preview to jump to the original.
   const handleJumpToMessage = (messageId) => {
     const el = document.getElementById(`message-${messageId}`);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.add("flash-highlight");
     setTimeout(() => el.classList.remove("flash-highlight"), 1500);
+  };
+
+  // Downloads the currently-viewed image. We fetch it as a blob rather than
+  // just setting `download` on an <a href="cloudinary-url">, because the
+  // `download` attribute is silently ignored by browsers for cross-origin
+  // URLs (which Cloudinary always is) — it would just open the image in a
+  // new tab instead of saving it. Fetching the bytes ourselves and handing
+  // the browser a same-origin blob URL makes the save-to-device actually work.
+  const handleDownloadImage = async () => {
+    if (!viewingImage || downloading) return;
+    setDownloading(true);
+    try {
+      const response = await fetch(viewingImage, { mode: "cors" });
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const extension = blob.type.split("/")[1]?.split("+")[0] || "jpg";
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `chatapp-image-${Date.now()}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error(err);
+      // Fallback: at least open it in a new tab so the user can long-press
+      // / right-click to save it manually if the fetch itself got blocked.
+      window.open(viewingImage, "_blank", "noopener,noreferrer");
+      toast.error("Couldn't auto-download — opened the image in a new tab instead");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const emitTyping = () => socket?.emit("typing", { conversationId: conversation._id, receiverIds });
@@ -380,7 +392,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     try {
       const { data } = await api.put(`/conversations/${conversation._id}/accept`);
       setConversations((prev) => prev.map((c) => (c._id === data._id ? data : c)));
-      conversation.status = "accepted"; // reflect immediately in this open view
+      conversation.status = "accepted";
     } catch (err) {
       toast.error(err.response?.data?.message || "Could not accept request");
     }
@@ -645,12 +657,25 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
             className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
             onClick={() => setViewingImage(null)}
           >
-            <button
-              className="absolute top-4 right-4 z-[101] bg-black/50 hover:bg-black/70 rounded-full p-2 text-white"
-              onClick={() => setViewingImage(null)}
-            >
-              <X className="h-6 w-6" />
-            </button>
+            <div className="absolute top-4 right-4 z-[101] flex items-center gap-2">
+              <button
+                className="bg-black/50 hover:bg-black/70 rounded-full p-2 text-white disabled:opacity-50"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownloadImage();
+                }}
+                disabled={downloading}
+                title="Download image"
+              >
+                <Download className="h-6 w-6" />
+              </button>
+              <button
+                className="bg-black/50 hover:bg-black/70 rounded-full p-2 text-white"
+                onClick={() => setViewingImage(null)}
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
             <img
               src={viewingImage}
               alt="Full size attachment"
