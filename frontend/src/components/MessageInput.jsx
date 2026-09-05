@@ -136,7 +136,18 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput, replyingTo
 
       {showEmojiPicker && (
         <div ref={emojiPickerRef} className="absolute bottom-full left-2 sm:left-4 mb-2 z-20 max-w-[calc(100vw-1rem)]">
-          <EmojiPicker onEmojiClick={handleEmojiClick} theme="auto" />
+          <EmojiPicker
+            onEmojiClick={handleEmojiClick}
+            theme="auto"
+            // Same fix as the reaction picker: the library auto-focuses its
+            // search box by default, which pops the keyboard open the
+            // moment you tap this button — shoving the picker (which sits
+            // right above the text input) around right when you're trying
+            // to browse it. Tapping the actual text field still opens the
+            // keyboard normally; this just stops the picker itself from
+            // triggering it.
+            autoFocusSearch={false}
+          />
         </div>
       )}
 

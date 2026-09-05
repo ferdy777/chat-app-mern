@@ -1,4 +1,3 @@
-// MessageBubble.jsx
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { format } from "date-fns";
@@ -29,6 +28,7 @@ const MessageBubble = ({
   onImageClick,
   onJumpToMessage,
   onEditingChange,
+  onReactionsChange,
 }) => {
   const [showReactions, setShowReactions] = useState(false);
   const [pickerPosition, setPickerPosition] = useState(null);
@@ -185,8 +185,25 @@ const MessageBubble = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showActions]);
 
+  // Tell the parent (ChatWindow) whenever the reaction picker opens/closes
+  // so it can hold off its own auto-scroll-to-bottom logic — same problem
+  // the edit textarea had: something resizing the viewport while this is
+  // open would otherwise yank the message list (and this picker along
+  // with it, visually) away from where you tapped.
   useEffect(() => {
+    onReactionsChange?.(showReactions);
     if (!showReactions) return;
+
+    // Bring the bubble fully into view FIRST, then measure it — the picker
+    // is a fixed-position overlay placed relative to the bubble's on-screen
+    // rect, so if the bubble was only partially visible (near the top/
+    // bottom edge) when tapped, computing position off that rect put the
+    // picker somewhere that didn't line up with what you could actually see.
+    // "auto" (instant, not "smooth") so the rect below reflects the final,
+    // settled position rather than mid-animation.
+    bubbleRef.current?.scrollIntoView({ behavior: "auto", block: "center" });
+    updateReactionPickerPosition();
+
     const handleClickOutside = (e) => {
       if (reactionPickerRef.current && !reactionPickerRef.current.contains(e.target)) {
         setShowReactions(false);
@@ -195,10 +212,14 @@ const MessageBubble = ({
     document.addEventListener("mousedown", handleClickOutside);
     window.addEventListener("scroll", updateReactionPickerPosition, true);
     window.addEventListener("resize", updateReactionPickerPosition);
+    // Recompute position on keyboard show/hide too, not just plain resize —
+    // this is the actual fix for "have to scroll up to see the picker".
+    window.visualViewport?.addEventListener("resize", updateReactionPickerPosition);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("scroll", updateReactionPickerPosition, true);
       window.removeEventListener("resize", updateReactionPickerPosition);
+      window.visualViewport?.removeEventListener("resize", updateReactionPickerPosition);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showReactions]);
@@ -224,10 +245,13 @@ const MessageBubble = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditing]);
 
-  // Let the parent know editing has ended even if this bubble unmounts
-  // (e.g. message deleted by someone else mid-edit).
+  // Let the parent know editing/reacting has ended even if this bubble
+  // unmounts (e.g. message deleted by someone else mid-edit).
   useEffect(() => {
-    return () => onEditingChange?.(false);
+    return () => {
+      onEditingChange?.(false);
+      onReactionsChange?.(false);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -280,7 +304,6 @@ const MessageBubble = ({
   };
 
   const handleReactClick = () => {
-    updateReactionPickerPosition();
     setShowActions(false);
     setShowReactions(true);
   };
@@ -434,7 +457,7 @@ const MessageBubble = ({
             {time}
             {isOwn &&
               (message.status === "read" ? (
-                <BsCheckAll size={16} className="text-sky-300" />
+                <BsCheckAll size={16} className="text-amber-300" />
               ) : message.status === "delivered" ? (
                 <BsCheckAll size={16} />
               ) : (
@@ -511,7 +534,16 @@ const MessageBubble = ({
             className="fixed z-50"
             style={{ top: pickerPosition.top, left: pickerPosition.left }}
           >
-            <EmojiPicker onEmojiClick={handleReact} theme="auto" width={PICKER_WIDTH} height={PICKER_HEIGHT} />
+            <EmojiPicker
+              onEmojiClick={handleReact}
+              theme="auto"
+              width={PICKER_WIDTH}
+              height={PICKER_HEIGHT}
+              // The library auto-focuses its internal search box by default,
+              // which is what was popping the keyboard open on tap — this is
+              // a quick reaction picker, not a place to type, so turn it off.
+              autoFocusSearch={false}
+            />
           </div>,
           document.body
         )}

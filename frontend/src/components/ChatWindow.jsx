@@ -1,4 +1,3 @@
-// ChatWindow.jsx
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
@@ -48,6 +47,12 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   // resize event — either of which would otherwise auto-scroll the whole
   // chat to the bottom mid-edit. This flag makes both skip that.
   const isEditingRef = useRef(false);
+  // Same idea, but for the reaction emoji picker: it's a fixed-position
+  // overlay positioned relative to the bubble at the moment it opens, so
+  // if anything auto-scrolls the message list (or the viewport resizes)
+  // while it's open, the picker ends up looking "off" relative to what's
+  // now on screen — you'd have to scroll to find it again.
+  const isReactingRef = useRef(false);
 
   const otherParticipant = conversation.isGroup
     ? null
@@ -264,7 +269,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         isInitialLoadRef.current = false;
         return;
       }
-      if (isEditingRef.current) return;
+      if (isEditingRef.current || isReactingRef.current) return;
       if (isNearBottomRef.current) scrollToBottom("auto");
     });
     observer.observe(content);
@@ -275,8 +280,11 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     const vv = window.visualViewport;
     if (!vv) return;
     const handleViewportResize = () => {
-      if (isEditingRef.current) return;
-      setTimeout(() => scrollToBottom("auto"), 100);
+      if (isEditingRef.current || isReactingRef.current) return;
+      setTimeout(() => {
+        if (isEditingRef.current || isReactingRef.current) return;
+        scrollToBottom("auto");
+      }, 100);
     };
     vv.addEventListener("resize", handleViewportResize);
     return () => vv.removeEventListener("resize", handleViewportResize);
@@ -577,6 +585,9 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
                 onJumpToMessage={handleJumpToMessage}
                 onEditingChange={(editing) => {
                   isEditingRef.current = editing;
+                }}
+                onReactionsChange={(reacting) => {
+                  isReactingRef.current = reacting;
                 }}
               />
             ))}
