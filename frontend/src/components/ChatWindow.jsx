@@ -35,6 +35,20 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     .filter((p) => p._id !== authUser._id)
     .map((p) => p._id);
 
+  const isPendingIncoming =
+    !conversation.isGroup &&
+    conversation.status === "pending" &&
+    conversation.requestedBy !== authUser._id;
+
+  const isPendingOutgoing =
+    !conversation.isGroup &&
+    conversation.status === "pending" &&
+    conversation.requestedBy === authUser._id;
+
+  const isGroupAdmin =
+    conversation.isGroup &&
+    conversation.admins?.some((a) => a === authUser._id || a._id === authUser._id);
+
   const scrollToBottom = (behavior = "smooth") => {
     bottomRef.current?.scrollIntoView({ behavior });
   };
@@ -125,6 +139,12 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
       if (conversationId === conversation._id) setIsOtherTyping(false);
     };
 
+    const handleGroupDeleted = ({ conversationId }) => {
+      if (conversationId !== conversation._id) return;
+      toast("This group was deleted");
+      onClose();
+    };
+
     socket.on("newMessage", handleNewMessage);
     socket.on("messagesRead", handleMessagesRead);
     socket.on("messageEdited", handleMessageEdited);
@@ -132,6 +152,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     socket.on("messageDeleted", handleMessageDeleted);
     socket.on("userTyping", handleTyping);
     socket.on("userStopTyping", handleStopTyping);
+    socket.on("groupDeleted", handleGroupDeleted);
 
     return () => {
       socket.off("newMessage", handleNewMessage);
@@ -141,6 +162,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
       socket.off("messageDeleted", handleMessageDeleted);
       socket.off("userTyping", handleTyping);
       socket.off("userStopTyping", handleStopTyping);
+      socket.off("groupDeleted", handleGroupDeleted);
     };
   }, [socket, conversation._id]);
 
@@ -248,6 +270,48 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     }
   };
 
+  const handleAcceptRequest = async () => {
+    try {
+      const { data } = await api.put(`/conversations/${conversation._id}/accept`);
+      setConversations((prev) => prev.map((c) => (c._id === data._id ? data : c)));
+      conversation.status = "accepted"; // reflect immediately in this open view
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Could not accept request");
+    }
+  };
+
+  const handleDeclineRequest = async () => {
+    try {
+      await api.delete(`/conversations/${conversation._id}/decline`);
+      setConversations((prev) => prev.filter((c) => c._id !== conversation._id));
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Could not decline request");
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!window.confirm(`Delete "${conversation.groupName}" for everyone? This can't be undone.`)) return;
+    try {
+      await api.delete(`/conversations/${conversation._id}`);
+      setConversations((prev) => prev.filter((c) => c._id !== conversation._id));
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Could not delete group");
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!window.confirm(`Leave "${conversation.groupName}"?`)) return;
+    try {
+      await api.post(`/conversations/${conversation._id}/leave`);
+      setConversations((prev) => prev.filter((c) => c._id !== conversation._id));
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Could not leave group");
+    }
+  };
+
   const displayName = conversation.isGroup ? conversation.groupName : otherParticipant?.fullName;
   const avatar = conversation.isGroup
     ? conversation.groupAvatar ||
@@ -331,6 +395,15 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
                   {isBlocked ? "Unblock" : "Block"} {otherParticipant?.fullName}
                 </DropdownMenuItem>
               )}
+              {conversation.isGroup && (
+                <DropdownMenuItem
+                  onClick={isGroupAdmin ? handleDeleteGroup : handleLeaveGroup}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <X className="h-4 w-4" />
+                  {isGroupAdmin ? "Delete group" : "Leave group"}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={onClose}>
                 <X className="h-4 w-4" /> Close chat
               </DropdownMenuItem>
@@ -383,13 +456,40 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
           </button>{" "}
           to send messages.
         </div>
+      ) : isPendingIncoming ? (
+        <div className="bg-card border-t border-border px-4 py-3 shrink-0">
+          <p className="text-center text-sm text-muted-foreground mb-3">
+            {otherParticipant?.fullName} wants to send you a message.
+          </p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={handleAcceptRequest}
+              className="bg-primary text-primary-foreground text-sm font-medium px-5 py-2 rounded-full"
+            >
+              Accept
+            </button>
+            <button
+              onClick={handleDeclineRequest}
+              className="bg-secondary text-muted-foreground text-sm font-medium px-5 py-2 rounded-full"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
       ) : (
-        <MessageInput
-          onSend={handleSend}
-          onTyping={emitTyping}
-          onStopTyping={emitStopTyping}
-          onFocusInput={handleInputFocus}
-        />
+        <>
+          {isPendingOutgoing && (
+            <div className="bg-card border-t border-border px-4 py-2 text-center text-xs text-muted-foreground shrink-0">
+              Message request sent — they'll see it once they accept.
+            </div>
+          )}
+          <MessageInput
+            onSend={handleSend}
+            onTyping={emitTyping}
+            onStopTyping={emitStopTyping}
+            onFocusInput={handleInputFocus}
+          />
+        </>
       )}
 
       {showContactProfile && (

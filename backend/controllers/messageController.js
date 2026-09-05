@@ -41,6 +41,20 @@ const sendMessage = async (req, res) => {
       }
     }
 
+    // Message-request gate: the receiver of a still-pending 1:1 conversation
+    // can't send until they explicitly accept it. The requester can keep
+    // sending while it's pending.
+    if (
+      !conversation.isGroup &&
+      conversation.status === "pending" &&
+      conversation.requestedBy?.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({
+        message: "Accept this message request before replying",
+        code: "REQUEST_PENDING",
+      });
+    }
+
     let imageUrl;
     if (imageBase64) {
       const uploadRes = await cloudinary.uploader.upload(imageBase64, {

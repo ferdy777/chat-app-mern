@@ -31,6 +31,17 @@ const conversationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Message",
     },
+    // 1:1 conversations start as "pending" message requests until the
+    // receiver accepts them. Groups are always "accepted".
+    status: {
+      type: String,
+      enum: ["pending", "accepted"],
+      default: "accepted",
+    },
+    requestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
   },
   { timestamps: true }
 );
