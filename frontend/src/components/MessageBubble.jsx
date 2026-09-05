@@ -9,7 +9,9 @@ import api from "../utils/axios";
 const PICKER_WIDTH = 300;
 const PICKER_HEIGHT = 400;
 const VIEWPORT_MARGIN = 8;
-const TOOLBAR_HEIGHT = 44;
+const MENU_WIDTH = 180;
+const MENU_ROW_HEIGHT = 40;
+const MENU_PADDING = 8;
 
 // Swipe-to-reply tuning — matches the WhatsApp feel: a little travel to
 // "arm" the icon, then a firm swipe to actually trigger it.
@@ -31,21 +33,17 @@ const MessageBubble = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
   const [showActions, setShowActions] = useState(false);
-  const [toolbarPosition, setToolbarPosition] = useState(null);
-  // How far the bubble is currently dragged right, for the swipe-to-reply
-  // gesture. 0 when idle/snapped back.
+  const [menuPosition, setMenuPosition] = useState(null);
   const [dragX, setDragX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
 
   const time = message.createdAt ? format(new Date(message.createdAt), "HH:mm") : "";
-  const reactionButtonRef = useRef(null);
-  const reactionPickerRef = useRef(null);
   const bubbleRef = useRef(null);
-  const toolbarRef = useRef(null);
+  const menuRef = useRef(null);
+  const reactionPickerRef = useRef(null);
+  const editTextareaRef = useRef(null);
   const hasReactions = message.reactions?.length > 0;
 
-  // Swipe gesture bookkeeping — refs so they don't trigger re-renders on
-  // every touchmove; only dragX (for the visible transform) does that.
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
   const gestureRef = useRef(null); // null | "swipe" | "scroll"
@@ -54,24 +52,47 @@ const MessageBubble = ({
 
   const canEdit = isOwn && !message.image;
   const canDelete = isOwn;
+  // Reply + React are always available; Edit/Delete only for your own
+  // messages — used both to size the menu and to decide what to render.
+  const menuItemCount = 2 + (canEdit ? 1 : 0) + (canDelete ? 1 : 0);
 
-  const updateToolbarPosition = () => {
+  const updateMenuPosition = () => {
     const rect = bubbleRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    let left = isOwn ? rect.right - 160 : rect.left;
-    left = Math.min(Math.max(left, VIEWPORT_MARGIN), window.innerWidth - 160 - VIEWPORT_MARGIN);
+    const menuHeight = menuItemCount * MENU_ROW_HEIGHT + MENU_PADDING;
 
-    let top = rect.top - TOOLBAR_HEIGHT - 6;
+    let left = isOwn ? rect.right - MENU_WIDTH : rect.left;
+    left = Math.min(Math.max(left, VIEWPORT_MARGIN), window.innerWidth - MENU_WIDTH - VIEWPORT_MARGIN);
+
+    let top = rect.top - menuHeight - 6;
     if (top < VIEWPORT_MARGIN) {
       top = rect.bottom + 6;
     }
 
-    setToolbarPosition({ top, left });
+    setMenuPosition({ top, left });
+  };
+
+  const updateReactionPickerPosition = () => {
+    const rect = bubbleRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    let left = isOwn ? rect.right - PICKER_WIDTH : rect.left;
+    left = Math.min(
+      Math.max(left, VIEWPORT_MARGIN),
+      window.innerWidth - PICKER_WIDTH - VIEWPORT_MARGIN
+    );
+
+    let top = rect.bottom + 4;
+    if (top + PICKER_HEIGHT > window.innerHeight - VIEWPORT_MARGIN) {
+      top = rect.top - PICKER_HEIGHT - 4;
+    }
+
+    setPickerPosition({ top, left });
   };
 
   const toggleActions = () => {
-    // A swipe that just finished shouldn't also pop the toolbar open —
+    // A swipe that just finished shouldn't also pop the menu open —
     // suppressClickRef is set during the swipe and cleared shortly after
     // touchend, once the resulting synthetic click has been swallowed.
     if (suppressClickRef.current) {
@@ -79,7 +100,7 @@ const MessageBubble = ({
       return;
     }
     if (isEditing) return;
-    if (!showActions) updateToolbarPosition();
+    if (!showActions) updateMenuPosition();
     setShowActions((v) => !v);
   };
 
@@ -103,11 +124,8 @@ const MessageBubble = ({
 
     if (gestureRef.current === null) {
       if (Math.abs(deltaX) < DIRECTION_LOCK_DISTANCE && Math.abs(deltaY) < DIRECTION_LOCK_DISTANCE) {
-        return; // not enough movement yet to tell tap from swipe from scroll
+        return;
       }
-      // Lock in a direction based on whichever axis moved further first.
-      // Only a rightward horizontal drag counts as a reply-swipe — leftward
-      // drags and any vertical movement fall through to normal scrolling.
       gestureRef.current = Math.abs(deltaX) > Math.abs(deltaY) && deltaX > 0 ? "swipe" : "scroll";
     }
 
@@ -132,8 +150,6 @@ const MessageBubble = ({
     setDragX(0);
     setIsDragging(false);
 
-    // Keep the click-suppression active for a beat so the synthetic click
-    // that follows touchend on mobile doesn't also open the tap toolbar.
     if (gestureRef.current === "swipe") {
       setTimeout(() => {
         suppressClickRef.current = false;
@@ -149,20 +165,20 @@ const MessageBubble = ({
       if (
         bubbleRef.current &&
         !bubbleRef.current.contains(e.target) &&
-        toolbarRef.current &&
-        !toolbarRef.current.contains(e.target)
+        menuRef.current &&
+        !menuRef.current.contains(e.target)
       ) {
         setShowActions(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    window.addEventListener("scroll", updateToolbarPosition, true);
-    window.addEventListener("resize", updateToolbarPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    window.addEventListener("resize", updateMenuPosition);
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
-      window.removeEventListener("scroll", updateToolbarPosition, true);
-      window.removeEventListener("resize", updateToolbarPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      window.removeEventListener("resize", updateMenuPosition);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showActions]);
@@ -170,51 +186,43 @@ const MessageBubble = ({
   useEffect(() => {
     if (!showReactions) return;
     const handleClickOutside = (e) => {
-      if (
-        reactionPickerRef.current &&
-        !reactionPickerRef.current.contains(e.target) &&
-        !reactionButtonRef.current.contains(e.target)
-      ) {
+      if (reactionPickerRef.current && !reactionPickerRef.current.contains(e.target)) {
         setShowReactions(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    window.addEventListener("scroll", updateReactionPickerPosition, true);
+    window.addEventListener("resize", updateReactionPickerPosition);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("scroll", updateReactionPickerPosition, true);
+      window.removeEventListener("resize", updateReactionPickerPosition);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showReactions]);
 
+  // Auto-grow the edit textarea to fit its content (up to a sane cap) so
+  // the WHOLE message is visible while editing instead of a tiny one-line
+  // box you had to scroll/drag through to see the rest of the text.
   useEffect(() => {
-    if (!showReactions) return;
+    if (!isEditing) return;
+    const ta = editTextareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+  }, [isEditing]);
 
-    const updatePosition = () => {
-      const rect = reactionButtonRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      let left = isOwn ? rect.right - PICKER_WIDTH : rect.left;
-      left = Math.min(
-        Math.max(left, VIEWPORT_MARGIN),
-        window.innerWidth - PICKER_WIDTH - VIEWPORT_MARGIN
-      );
-
-      let top = rect.bottom + 4;
-      if (top + PICKER_HEIGHT > window.innerHeight - VIEWPORT_MARGIN) {
-        top = rect.top - PICKER_HEIGHT - 4;
-      }
-
-      setPickerPosition({ top, left });
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [showReactions, isOwn]);
+  const handleEditTextChange = (e) => {
+    setEditText(e.target.value);
+    const ta = e.target;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  };
 
   const handleReact = async (emojiData) => {
     setShowReactions(false);
-    setShowActions(false);
     try {
       const { data } = await api.post(`/messages/${message._id}/react`, { emoji: emojiData.emoji });
       onUpdated?.(data);
@@ -234,6 +242,11 @@ const MessageBubble = ({
     }
   };
 
+  const handleCancelEdit = () => {
+    setEditText(message.text || "");
+    setIsEditing(false);
+  };
+
   const handleDelete = async () => {
     setShowActions(false);
     try {
@@ -247,6 +260,12 @@ const MessageBubble = ({
   const handleReplyClick = () => {
     setShowActions(false);
     onReply?.(message);
+  };
+
+  const handleReactClick = () => {
+    updateReactionPickerPosition();
+    setShowActions(false);
+    setShowReactions(true);
   };
 
   const handleEditClick = () => {
@@ -272,9 +291,9 @@ const MessageBubble = ({
   const swipeArmed = dragX >= SWIPE_TRIGGER_THRESHOLD;
 
   const bubbleColor = isOwn
-    ? "bg-indigo-600 dark:bg-indigo-500 text-white"
+    ? "bg-blue-600 dark:bg-blue-500 text-white"
     : "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100";
-  const timeColor = isOwn ? "text-indigo-100/85" : "text-muted-foreground";
+  const timeColor = isOwn ? "text-blue-100/85" : "text-muted-foreground";
   const quoteBg = isOwn ? "bg-black/15" : "bg-black/5 dark:bg-white/5";
 
   return (
@@ -284,16 +303,13 @@ const MessageBubble = ({
         hasReactions ? "mb-2.5" : ""
       }`}
     >
-      {/* Reply icon revealed behind the bubble as it's dragged right —
-          fixed near the left of the row regardless of whether the message
-          itself is left- or right-aligned, matching the WhatsApp gesture. */}
       <div
         className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"
         style={{ opacity: swipeProgress }}
       >
         <div
           className={`rounded-full p-2 transition-colors ${
-            swipeArmed ? "bg-indigo-600 text-white" : "bg-secondary text-muted-foreground"
+            swipeArmed ? "bg-blue-600 text-white" : "bg-secondary text-muted-foreground"
           }`}
         >
           <Reply className="h-4 w-4" />
@@ -353,16 +369,39 @@ const MessageBubble = ({
         )}
 
         {isEditing ? (
-          <div className="flex items-center gap-1 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
-            <input
-              autoFocus
+          <div className="min-w-[220px] max-w-[280px]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[11px] uppercase tracking-wide opacity-70 mb-1">Editing message</p>
+            <textarea
+              ref={editTextareaRef}
               value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSaveEdit()}
-              className="flex-1 bg-background/70 text-foreground text-sm rounded px-2 py-1 outline-none"
+              onChange={handleEditTextChange}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSaveEdit();
+                } else if (e.key === "Escape") {
+                  handleCancelEdit();
+                }
+              }}
+              rows={1}
+              className="w-full resize-none bg-background/80 text-foreground text-[15px] leading-snug rounded-md px-2.5 py-2 outline-none"
             />
-            <Check className="h-4 w-4 cursor-pointer" onClick={handleSaveEdit} />
-            <X className="h-4 w-4 cursor-pointer" onClick={() => setIsEditing(false)} />
+            <div className="flex items-center justify-end gap-3 mt-2">
+              <button
+                onClick={handleCancelEdit}
+                className="p-1.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                title="Cancel"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                className="p-1.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                title="Save"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         ) : (
           message.text && (
@@ -372,18 +411,20 @@ const MessageBubble = ({
           )
         )}
 
-        <span className={`text-xs float-right mt-1 ml-2 flex items-center gap-1 ${timeColor}`}>
-          {message.isEdited && <span className="italic">edited</span>}
-          {time}
-          {isOwn &&
-            (message.status === "read" ? (
-              <BsCheckAll size={16} className="text-sky-300" />
-            ) : message.status === "delivered" ? (
-              <BsCheckAll size={16} />
-            ) : (
-              <BsCheck size={16} />
-            ))}
-        </span>
+        {!isEditing && (
+          <span className={`text-xs float-right mt-1 ml-2 flex items-center gap-1 ${timeColor}`}>
+            {message.isEdited && <span className="italic">edited</span>}
+            {time}
+            {isOwn &&
+              (message.status === "read" ? (
+                <BsCheckAll size={16} className="text-sky-300" />
+              ) : message.status === "delivered" ? (
+                <BsCheckAll size={16} />
+              ) : (
+                <BsCheck size={16} />
+              ))}
+          </span>
+        )}
 
         {hasReactions && (
           <div className="absolute -bottom-3 right-2 z-10 bg-card border border-border rounded-full px-1.5 py-0.5 text-xs shadow flex gap-0.5">
@@ -397,37 +438,48 @@ const MessageBubble = ({
         )}
       </div>
 
+      {/* Full labeled menu (icon + text) instead of icon-only buttons — much
+          clearer for anyone who wouldn't otherwise recognize what a bare
+          icon does. Same floating/portal approach as before, so it never
+          causes the bubble row to reflow when it opens. */}
       {showActions &&
-        toolbarPosition &&
+        menuPosition &&
         createPortal(
           <div
-            ref={toolbarRef}
-            className="fixed z-50 bg-card border border-border shadow-lg rounded-full flex items-center gap-0.5 px-1 py-1"
-            style={{ top: toolbarPosition.top, left: toolbarPosition.left }}
+            ref={menuRef}
+            className="fixed z-50 bg-card border border-border shadow-lg rounded-lg py-1 overflow-hidden"
+            style={{ top: menuPosition.top, left: menuPosition.left, width: MENU_WIDTH }}
           >
-            <button className="p-2 rounded-full hover:bg-secondary" onClick={handleReplyClick} title="Reply">
-              <Reply className="h-4 w-4 text-muted-foreground" />
+            <button
+              className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-foreground hover:bg-secondary text-left"
+              onClick={handleReplyClick}
+            >
+              <Reply className="h-4 w-4 text-muted-foreground shrink-0" />
+              Reply
             </button>
             <button
-              ref={reactionButtonRef}
-              className="p-2 rounded-full hover:bg-secondary"
-              onClick={() => setShowReactions((v) => !v)}
-              title="React"
+              className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-foreground hover:bg-secondary text-left"
+              onClick={handleReactClick}
             >
-              <SmilePlus className="h-4 w-4 text-muted-foreground" />
+              <SmilePlus className="h-4 w-4 text-muted-foreground shrink-0" />
+              React
             </button>
             {canEdit && (
-              <button className="p-2 rounded-full hover:bg-secondary" onClick={handleEditClick} title="Edit">
-                <Pencil className="h-4 w-4 text-muted-foreground" />
+              <button
+                className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-foreground hover:bg-secondary text-left"
+                onClick={handleEditClick}
+              >
+                <Pencil className="h-4 w-4 text-muted-foreground shrink-0" />
+                Edit
               </button>
             )}
             {canDelete && (
               <button
-                className="p-2 rounded-full hover:bg-secondary"
+                className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-destructive hover:bg-secondary text-left"
                 onClick={handleDelete}
-                title="Delete"
               >
-                <Trash2 className="h-4 w-4 text-destructive" />
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete
               </button>
             )}
           </div>,
