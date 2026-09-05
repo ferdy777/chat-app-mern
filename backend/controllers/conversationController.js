@@ -34,6 +34,15 @@ const accessConversation = async (req, res) => {
       if (io && receiverSocketId) {
         io.to(receiverSocketId).emit("newMessageRequest", conversation);
       }
+    } else if (conversation.deletedFor?.some((id) => id.toString() === req.user._id.toString())) {
+      // Re-starting a chat you'd deleted un-hides it for you again.
+      await Conversation.updateOne(
+        { _id: conversation._id },
+        { $pull: { deletedFor: req.user._id } }
+      );
+      conversation.deletedFor = conversation.deletedFor.filter(
+        (id) => id.toString() !== req.user._id.toString()
+      );
     }
 
     res.status(200).json(conversation);
@@ -45,11 +54,13 @@ const accessConversation = async (req, res) => {
 
 // @route GET /api/conversations
 // Regular chat list: groups, accepted 1:1s, and pending 1:1s *you* started
-// (so you can see "request sent, waiting for reply").
+// (so you can see "request sent, waiting for reply") — minus anything you
+// deleted from your own list.
 const getConversations = async (req, res) => {
   try {
     const conversations = await Conversation.find({
       participants: { $in: [req.user._id] },
+      deletedFor: { $ne: req.user._id },
       $or: [
         { isGroup: true },
         { status: "accepted" },
@@ -185,55 +196,53 @@ const createGroupConversation = async (req, res) => {
   }
 };
 
-// @route DELETE /api/conversations/:conversationId
-// Group only, admin-only. Deletes the group and all its messages for everyone.
-const deleteGroup = async (req, res) => {
+// @route POST /api/conversations/:conversationId/remove
+// Unified "remove this chat" action, used both from the chat list
+// (long-press / right-click / multi-select) and from inside an open chat:
+//  - 1:1 conversation -> hidden from MY list only. The other participant
+//    keeps it, and it un-hides for me automatically if either of us
+//    messages again.
+//  - group, and I'm an admin -> deletes the group for everyone.
+//  - group, and I'm just a member -> leaves the group (promoting a new
+//    admin if I was the last one).
+const removeChat = async (req, res) => {
   try {
     const { conversationId } = req.params;
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) return res.status(404).json({ message: "Conversation not found" });
-    if (!conversation.isGroup) {
-      return res.status(400).json({ message: "Not a group conversation" });
-    }
-    if (!conversation.admins.some((a) => a.toString() === req.user._id.toString())) {
-      return res.status(403).json({ message: "Only group admins can delete the group" });
-    }
-
-    const participantIds = conversation.participants.map((p) => p.toString());
-    await Message.deleteMany({ conversation: conversationId });
-    await conversation.deleteOne();
-
-    const io = getIO();
-    if (io) {
-      participantIds.forEach((pId) => {
-        const socketId = getReceiverSocketId(pId);
-        if (socketId) io.to(socketId).emit("groupDeleted", { conversationId });
-      });
-    }
-
-    res.status(200).json({ message: "Group deleted" });
-  } catch (error) {
-    console.error("deleteGroup error:", error.message);
-    res.status(500).json({ message: "Server error deleting group" });
-  }
-};
-
-// @route POST /api/conversations/:conversationId/leave
-// Group only. Any member can leave. If the last admin leaves and others
-// remain, the next member is promoted to admin so the group isn't orphaned.
-const leaveGroup = async (req, res) => {
-  try {
-    const { conversationId } = req.params;
-    const conversation = await Conversation.findById(conversationId);
-    if (!conversation) return res.status(404).json({ message: "Conversation not found" });
-    if (!conversation.isGroup) {
-      return res.status(400).json({ message: "Not a group conversation" });
-    }
 
     const userId = req.user._id.toString();
+    if (!conversation.participants.some((p) => p.toString() === userId)) {
+      return res.status(403).json({ message: "Not a participant of this conversation" });
+    }
+
+    if (!conversation.isGroup) {
+      await Conversation.updateOne(
+        { _id: conversationId },
+        { $addToSet: { deletedFor: req.user._id } }
+      );
+      return res.status(200).json({ message: "Chat removed", mode: "hidden" });
+    }
+
+    const isAdmin = conversation.admins.some((a) => a.toString() === userId);
+    const participantIds = conversation.participants.map((p) => p.toString());
+
+    if (isAdmin) {
+      await Message.deleteMany({ conversation: conversationId });
+      await conversation.deleteOne();
+
+      const io = getIO();
+      if (io) {
+        participantIds.forEach((pId) => {
+          const socketId = getReceiverSocketId(pId);
+          if (socketId) io.to(socketId).emit("groupDeleted", { conversationId });
+        });
+      }
+      return res.status(200).json({ message: "Group deleted", mode: "deleted" });
+    }
+
     conversation.participants = conversation.participants.filter((p) => p.toString() !== userId);
     conversation.admins = conversation.admins.filter((a) => a.toString() !== userId);
-
     if (conversation.admins.length === 0 && conversation.participants.length > 0) {
       conversation.admins.push(conversation.participants[0]);
     }
@@ -248,10 +257,10 @@ const leaveGroup = async (req, res) => {
     const io = getIO();
     if (io) io.to(conversationId).emit("memberLeftGroup", { conversationId, userId });
 
-    res.status(200).json({ message: "Left group" });
+    res.status(200).json({ message: "Left group", mode: "left" });
   } catch (error) {
-    console.error("leaveGroup error:", error.message);
-    res.status(500).json({ message: "Server error leaving group" });
+    console.error("removeChat error:", error.message);
+    res.status(500).json({ message: "Server error removing chat" });
   }
 };
 
@@ -262,6 +271,5 @@ module.exports = {
   acceptRequest,
   declineRequest,
   createGroupConversation,
-  deleteGroup,
-  leaveGroup,
+  removeChat,
 };

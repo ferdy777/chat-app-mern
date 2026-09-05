@@ -6,8 +6,7 @@ const {
   acceptRequest,
   declineRequest,
   createGroupConversation,
-  deleteGroup,
-  leaveGroup,
+  removeChat,
 } = require("../controllers/conversationController");
 const protect = require("../middleware/authMiddleware");
 
@@ -22,7 +21,6 @@ router.post("/group", createGroupConversation);
 
 router.put("/:conversationId/accept", acceptRequest);
 router.delete("/:conversationId/decline", declineRequest);
-router.post("/:conversationId/leave", leaveGroup);
-router.delete("/:conversationId", deleteGroup);
+router.post("/:conversationId/remove", removeChat);
 
 module.exports = router;

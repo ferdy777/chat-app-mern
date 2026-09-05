@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
-import { MessageCircle, User, Users, X, ShieldOff, Shield } from "lucide-react";
+import { MessageCircle, User, Users, X, ShieldOff, Shield, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 import api from "../utils/axios";
@@ -190,7 +190,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     const vv = window.visualViewport;
     if (!vv) return;
     const handleViewportResize = () => {
-      // small delay so it fires after the keyboard has actually resized the layout
       setTimeout(() => scrollToBottom("auto"), 100);
     };
     vv.addEventListener("resize", handleViewportResize);
@@ -202,7 +201,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   };
 
   useEffect(() => {
-    // ensures we land on the last message whenever a new conversation is opened
     scrollToBottom("auto");
   }, [conversation._id]);
 
@@ -290,25 +288,24 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     }
   };
 
-  const handleDeleteGroup = async () => {
-    if (!window.confirm(`Delete "${conversation.groupName}" for everyone? This can't be undone.`)) return;
-    try {
-      await api.delete(`/conversations/${conversation._id}`);
-      setConversations((prev) => prev.filter((c) => c._id !== conversation._id));
-      onClose();
-    } catch (err) {
-      toast.error(err.response?.data?.message || "Could not delete group");
-    }
-  };
+  // Unified remove action: hides a 1:1 chat for me only; deletes a group
+  // for everyone if I'm admin, or leaves it if I'm just a member. Same
+  // endpoint the sidebar's long-press/select-mode delete uses.
+  const handleRemoveChat = async () => {
+    const confirmMsg = conversation.isGroup
+      ? isGroupAdmin
+        ? `Delete "${conversation.groupName}" for everyone? This can't be undone.`
+        : `Leave "${conversation.groupName}"?`
+      : `Delete this chat with ${otherParticipant?.fullName}? It stays on their side.`;
 
-  const handleLeaveGroup = async () => {
-    if (!window.confirm(`Leave "${conversation.groupName}"?`)) return;
+    if (!window.confirm(confirmMsg)) return;
+
     try {
-      await api.post(`/conversations/${conversation._id}/leave`);
+      await api.post(`/conversations/${conversation._id}/remove`);
       setConversations((prev) => prev.filter((c) => c._id !== conversation._id));
       onClose();
     } catch (err) {
-      toast.error(err.response?.data?.message || "Could not leave group");
+      toast.error(err.response?.data?.message || "Could not remove chat");
     }
   };
 
@@ -395,12 +392,20 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
                   {isBlocked ? "Unblock" : "Block"} {otherParticipant?.fullName}
                 </DropdownMenuItem>
               )}
-              {conversation.isGroup && (
+              {!conversation.isGroup && (
                 <DropdownMenuItem
-                  onClick={isGroupAdmin ? handleDeleteGroup : handleLeaveGroup}
+                  onClick={handleRemoveChat}
                   className="text-destructive focus:text-destructive"
                 >
-                  <X className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4" /> Delete chat
+                </DropdownMenuItem>
+              )}
+              {conversation.isGroup && (
+                <DropdownMenuItem
+                  onClick={handleRemoveChat}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
                   {isGroupAdmin ? "Delete group" : "Leave group"}
                 </DropdownMenuItem>
               )}

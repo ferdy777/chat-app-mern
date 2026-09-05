@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   MessageCircle,
@@ -17,6 +17,8 @@ import {
   Clock,
   Check,
   Inbox,
+  Trash2,
+  CheckSquare,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import api from "../utils/axios";
@@ -56,6 +58,8 @@ const STATUS_DOT_COLOR = {
   offline: "",
 };
 
+const LONG_PRESS_MS = 450;
+
 const Sidebar = ({
   conversations,
   setConversations,
@@ -74,6 +78,9 @@ const Sidebar = ({
   const [viewingAvatar, setViewingAvatar] = useState(null);
   const [activeTab, setActiveTab] = useState("chats"); // "chats" | "requests"
   const [requests, setRequests] = useState([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const longPressTimer = useRef(null);
   const { authUser, logout } = useAuth();
   const { socket, onlineUsers, userStatuses, setMyStatus } = useSocket();
 
@@ -201,6 +208,77 @@ const Sidebar = ({
     }
   };
 
+  // ---- Select mode (long-press / right-click a chat to delete without opening it) ----
+
+  const enterSelectMode = (convId) => {
+    setSelectMode(true);
+    setSelectedIds(new Set([convId]));
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelect = (convId) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(convId)) next.delete(convId);
+      else next.add(convId);
+      return next;
+    });
+  };
+
+  const handleItemClick = (conv) => {
+    if (selectMode) {
+      toggleSelect(conv._id);
+    } else {
+      setSelectedConversation(conv);
+    }
+  };
+
+  const handleLongPressStart = (convId) => {
+    longPressTimer.current = setTimeout(() => enterSelectMode(convId), LONG_PRESS_MS);
+  };
+
+  const handleLongPressEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handleContextMenu = (e, convId) => {
+    e.preventDefault();
+    if (!selectMode) {
+      enterSelectMode(convId);
+    } else {
+      toggleSelect(convId);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    const label = ids.length === 1 ? "this chat" : `these ${ids.length} chats`;
+    const confirmed = window.confirm(
+      `Remove ${label}? Groups you admin will be deleted for everyone; groups you're just a member of will be left.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await Promise.all(ids.map((id) => api.post(`/conversations/${id}/remove`)));
+      setConversations((prev) => prev.filter((c) => !selectedIds.has(c._id)));
+      if (selectedConversation && selectedIds.has(selectedConversation._id)) {
+        setSelectedConversation(null);
+      }
+      exitSelectMode();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Could not remove some chats");
+    }
+  };
+
   const myStatus = userStatuses[authUser._id] || "online";
   const activeStatus = STATUS_OPTIONS.find((s) => s.value === myStatus) || STATUS_OPTIONS[0];
 
@@ -210,134 +288,162 @@ const Sidebar = ({
         selectedConversation ? "hidden sm:flex" : "flex"
       }`}
     >
-      <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-border">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <img
-            src={
-              authUser.avatar ||
-              `https://ui-avatars.com/api/?name=${authUser.fullName}&background=00a884&color=fff`
-            }
-            onError={(e) => {
-              e.currentTarget.onerror = null;
-              e.currentTarget.src = `https://ui-avatars.com/api/?name=${authUser.fullName}&background=00a884&color=fff`;
-            }}
-            alt="me"
-            className="w-10 h-10 rounded-full object-cover cursor-pointer shrink-0"
-            onClick={() => setShowProfile(true)}
-          />
-          <span className="font-semibold text-foreground truncate">ChatApp</span>
+      {selectMode ? (
+        <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-border">
+          <button
+            onClick={exitSelectMode}
+            className="p-2 -ml-2 rounded-full hover:bg-secondary text-muted-foreground"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <span className="text-sm font-medium text-foreground">
+            {selectedIds.size} selected
+          </span>
+          <button
+            onClick={handleBulkDelete}
+            disabled={selectedIds.size === 0}
+            className="p-2 -mr-2 rounded-full hover:bg-secondary text-destructive disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            <Trash2 className="h-5 w-5" />
+          </button>
         </div>
-        <div className="flex items-center gap-1 text-muted-foreground">
-          <ThemeToggle />
+      ) : (
+        <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-border">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img
+              src={
+                authUser.avatar ||
+                `https://ui-avatars.com/api/?name=${authUser.fullName}&background=00a884&color=fff`
+              }
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = `https://ui-avatars.com/api/?name=${authUser.fullName}&background=00a884&color=fff`;
+              }}
+              alt="me"
+              className="w-10 h-10 rounded-full object-cover cursor-pointer shrink-0"
+              onClick={() => setShowProfile(true)}
+            />
+            <span className="font-semibold text-foreground truncate">ChatApp</span>
+          </div>
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <ThemeToggle />
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="p-2 rounded-full hover:bg-secondary hover:text-foreground transition-colors"
-                title="New chat or group"
-              >
-                <Plus className="h-5 w-5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setShowNewChat(true)}>
-                <MessageCircle className="h-4 w-4" /> New chat
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowNewGroup(true)}>
-                <Users className="h-4 w-4" /> New group
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="p-2 rounded-full hover:bg-secondary hover:text-foreground transition-colors"
+                  title="New chat or group"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setShowNewChat(true)}>
+                  <MessageCircle className="h-4 w-4" /> New chat
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowNewGroup(true)}>
+                  <Users className="h-4 w-4" /> New group
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="p-2 rounded-full hover:bg-secondary hover:text-foreground transition-colors"
-                title="Menu"
-              >
-                <MoreVertical className="h-5 w-5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={() => setShowProfile(true)}>
-                <User className="h-4 w-4" /> Profile
-              </DropdownMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="p-2 rounded-full hover:bg-secondary hover:text-foreground transition-colors"
+                  title="Menu"
+                >
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem onClick={() => setShowProfile(true)}>
+                  <User className="h-4 w-4" /> Profile
+                </DropdownMenuItem>
 
-              <DropdownMenuSeparator />
+                <DropdownMenuSeparator />
 
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <activeStatus.icon className={`h-4 w-4 ${activeStatus.color}`} />
-                  Status: {activeStatus.label}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuPortal>
-                  <DropdownMenuSubContent>
-                    {STATUS_OPTIONS.map(({ value, label, color, icon: Icon }) => (
-                      <DropdownMenuItem key={value} onClick={() => handleStatusChange(value)}>
-                        <Icon className={`h-4 w-4 ${color}`} />
-                        {label}
-                        {myStatus === value && (
-                          <span className="ml-auto text-xs text-muted-foreground">✓</span>
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuPortal>
-              </DropdownMenuSub>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <activeStatus.icon className={`h-4 w-4 ${activeStatus.color}`} />
+                    Status: {activeStatus.label}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent>
+                      {STATUS_OPTIONS.map(({ value, label, color, icon: Icon }) => (
+                        <DropdownMenuItem key={value} onClick={() => handleStatusChange(value)}>
+                          <Icon className={`h-4 w-4 ${color}`} />
+                          {label}
+                          {myStatus === value && (
+                            <span className="ml-auto text-xs text-muted-foreground">✓</span>
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
 
-              <DropdownMenuSeparator />
+                <DropdownMenuSeparator />
 
-              <DropdownMenuItem onClick={() => setShowPrivacy(true)}>
-                <Shield className="h-4 w-4" /> Privacy
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowBlocked(true)}>
-                <X className="h-4 w-4" /> Blocked users
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowAccount(true)}>
-                <Settings className="h-4 w-4" /> Account
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowHelp(true)}>
-                <HelpCircle className="h-4 w-4" /> Help & about
-              </DropdownMenuItem>
+                {activeTab === "chats" && conversations.length > 0 && (
+                  <DropdownMenuItem onClick={() => setSelectMode(true)}>
+                    <CheckSquare className="h-4 w-4" /> Select chats
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={() => setShowPrivacy(true)}>
+                  <Shield className="h-4 w-4" /> Privacy
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowBlocked(true)}>
+                  <X className="h-4 w-4" /> Blocked users
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowAccount(true)}>
+                  <Settings className="h-4 w-4" /> Account
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowHelp(true)}>
+                  <HelpCircle className="h-4 w-4" /> Help & about
+                </DropdownMenuItem>
 
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
-                <LogOut className="h-4 w-4" /> Log out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
+                  <LogOut className="h-4 w-4" /> Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex border-b border-border shrink-0">
-        <button
-          onClick={() => setActiveTab("chats")}
-          className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-            activeTab === "chats"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-          }`}
-        >
-          Chats
-        </button>
-        <button
-          onClick={() => setActiveTab("requests")}
-          className={`flex-1 py-2.5 text-sm font-medium transition-colors relative ${
-            activeTab === "requests"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-          }`}
-        >
-          Requests
-          {requests.length > 0 && (
-            <span className="ml-1.5 bg-primary text-primary-foreground text-xs font-semibold rounded-full min-w-[18px] h-[18px] inline-flex items-center justify-center px-1">
-              {requests.length}
-            </span>
-          )}
-        </button>
-      </div>
+      {!selectMode && (
+        <div className="flex border-b border-border shrink-0">
+          <button
+            onClick={() => setActiveTab("chats")}
+            className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
+              activeTab === "chats"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
+          >
+            Chats
+          </button>
+          <button
+            onClick={() => setActiveTab("requests")}
+            className={`flex-1 py-2.5 text-sm font-medium transition-colors relative ${
+              activeTab === "requests"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
+          >
+            Requests
+            {requests.length > 0 && (
+              <span className="ml-1.5 bg-primary text-primary-foreground text-xs font-semibold rounded-full min-w-[18px] h-[18px] inline-flex items-center justify-center px-1">
+                {requests.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
 
-      {activeTab === "chats" && (
+      {!selectMode && activeTab === "chats" && (
         <div className="px-3 py-2">
           <div className="flex items-center bg-secondary rounded-lg px-3 py-1.5">
             <Search className="text-muted-foreground h-4 w-4 mr-3 shrink-0" />
@@ -359,7 +465,7 @@ const Sidebar = ({
       )}
 
       <div className="flex-1 overflow-y-auto">
-        {activeTab === "chats" && (
+        {(selectMode || activeTab === "chats") && (
           <>
             {conversations.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground px-8 text-center">
@@ -367,12 +473,12 @@ const Sidebar = ({
                 <p className="text-sm">No chats yet. Tap + to start a new conversation.</p>
               </div>
             )}
-            {conversations.length > 0 && visibleConversations.length === 0 && (
+            {conversations.length > 0 && visibleConversations.length === 0 && !selectMode && (
               <p className="text-center text-muted-foreground text-sm py-6">
                 No chats match &quot;{search}&quot;
               </p>
             )}
-            {visibleConversations.map((conv) => {
+            {(selectMode ? conversations : visibleConversations).map((conv) => {
               const other = getOtherParticipant(conv);
               const displayName = getDisplayName(conv);
               const avatar = conv.isGroup
@@ -384,20 +490,38 @@ const Sidebar = ({
                 !conv.isGroup &&
                 (onlineUsers.includes(other?._id) || other?.username === "chatapp_bot");
               const dotClass = !conv.isGroup ? getStatusDotClass(other?._id, isOnline) : "";
-              const isSelected = selectedConversation?._id === conv._id;
+              const isOpen = selectedConversation?._id === conv._id;
+              const isChecked = selectedIds.has(conv._id);
               const isWaitingReply = !conv.isGroup && conv.status === "pending";
 
               return (
                 <div
                   key={conv._id}
-                  onClick={() => setSelectedConversation(conv)}
-                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-border hover:bg-secondary transition-colors ${
-                    isSelected ? "bg-secondary" : ""
+                  onClick={() => handleItemClick(conv)}
+                  onContextMenu={(e) => handleContextMenu(e, conv._id)}
+                  onTouchStart={() => handleLongPressStart(conv._id)}
+                  onTouchEnd={handleLongPressEnd}
+                  onTouchMove={handleLongPressEnd}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-border hover:bg-secondary transition-colors select-none ${
+                    isOpen || isChecked ? "bg-secondary" : ""
                   }`}
                 >
+                  {selectMode && (
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                        isChecked
+                          ? "bg-primary border-primary"
+                          : "border-muted-foreground bg-transparent"
+                      }`}
+                    >
+                      {isChecked && <Check className="h-3 w-3 text-primary-foreground" />}
+                    </div>
+                  )}
+
                   <div
                     className="relative shrink-0"
                     onClick={(e) => {
+                      if (selectMode) return;
                       e.stopPropagation();
                       setViewingAvatar({ src: avatar, name: displayName });
                     }}
@@ -451,7 +575,7 @@ const Sidebar = ({
           </>
         )}
 
-        {activeTab === "requests" && (
+        {!selectMode && activeTab === "requests" && (
           <>
             {requests.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground px-8 text-center">

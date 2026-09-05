@@ -71,6 +71,8 @@ const sendMessage = async (req, res) => {
     });
 
     conversation.lastMessage = message._id;
+    // New activity un-hides the chat for anyone who'd deleted it from their list.
+    conversation.deletedFor = [];
     await conversation.save();
 
     const populatedMessage = await message.populate("sender", "-password");
@@ -132,6 +134,7 @@ async function maybeSendBotReply(conversation, senderId, incomingText) {
       });
 
       conversation.lastMessage = botMessage._id;
+      conversation.deletedFor = [];
       await conversation.save();
 
       const populatedBotMessage = await botMessage.populate("sender", "-password");
@@ -187,8 +190,6 @@ const markMessagesAsRead = async (req, res) => {
     const { conversationId, messageIds } = req.body;
     if (!messageIds?.length) return res.status(400).json({ message: "messageIds required" });
 
-    // Reader's own privacy setting decides whether the sender sees read receipts.
-    // The reader's unread count still clears either way.
     const reader = await User.findById(req.user._id).select("privacy");
     const receiptsAllowed = reader?.privacy?.readReceiptsEnabled !== false;
 
