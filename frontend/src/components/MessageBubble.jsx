@@ -29,10 +29,28 @@ const MessageBubble = ({
   const [pickerPosition, setPickerPosition] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
+  // Reply/react/menu icons: shown on hover on desktop (handled purely via
+  // the sm:group-hover CSS below), but mobile has no hover — so there we
+  // reveal them only when the user taps the message bubble itself, same
+  // idea as tapping a message on WhatsApp. This state (+ the click-outside
+  // effect below) drives that tap-to-reveal / tap-elsewhere-to-hide flow.
+  const [showActions, setShowActions] = useState(false);
   const time = message.createdAt ? format(new Date(message.createdAt), "HH:mm") : "";
   const reactionButtonRef = useRef(null);
   const reactionPickerRef = useRef(null);
+  const rowRef = useRef(null);
   const hasReactions = message.reactions?.length > 0;
+
+  useEffect(() => {
+    if (!showActions) return;
+    const handleClickOutside = (e) => {
+      if (rowRef.current && !rowRef.current.contains(e.target)) {
+        setShowActions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showActions]);
 
   useEffect(() => {
     if (!showReactions) return;
@@ -81,6 +99,7 @@ const MessageBubble = ({
 
   const handleReact = async (emojiData) => {
     setShowReactions(false);
+    setShowActions(false);
     try {
       const { data } = await api.post(`/messages/${message._id}/react`, { emoji: emojiData.emoji });
       onUpdated?.(data);
@@ -109,6 +128,11 @@ const MessageBubble = ({
     }
   };
 
+  const handleReplyClick = () => {
+    onReply?.(message);
+    setShowActions(false);
+  };
+
   if (message.isDeleted) {
     return (
       <div
@@ -131,16 +155,22 @@ const MessageBubble = ({
         hasReactions ? "mb-2.5" : ""
       }`}
     >
-      <div className={`flex items-center gap-1 ${isOwn ? "flex-row-reverse" : ""}`}>
+      <div ref={rowRef} className={`flex items-center gap-1 ${isOwn ? "flex-row-reverse" : ""}`}>
         <div
-          className={`max-w-[85%] sm:max-w-[65%] rounded-lg px-3 py-2 shadow relative text-foreground ${
+          onClick={() => {
+            if (!isEditing) setShowActions((v) => !v);
+          }}
+          className={`max-w-[85%] sm:max-w-[65%] rounded-lg px-3 py-2 shadow relative text-foreground cursor-pointer sm:cursor-auto ${
             isOwn ? "bg-wa-bubbleOut" : "bg-wa-bubbleIn"
           }`}
         >
           {reply && (
             <button
               type="button"
-              onClick={() => onJumpToMessage?.(reply._id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onJumpToMessage?.(reply._id);
+              }}
               className="block w-full text-left mb-1.5 pl-2 border-l-2 border-primary/70 bg-black/10 dark:bg-white/5 rounded-r px-2 py-1"
             >
               <p className="text-xs font-medium text-primary truncate">
@@ -164,13 +194,19 @@ const MessageBubble = ({
             <img
               src={message.image}
               alt="attachment"
-              className="rounded-md mb-1 max-h-64 object-cover cursor-pointer"
-              onClick={() => onImageClick?.(message.image)}
+              className="rounded-md mb-1 max-h-64 object-cover"
+              onClick={(e) => {
+                e.stopPropagation();
+                onImageClick?.(message.image);
+              }}
             />
           )}
 
           {isEditing ? (
-            <div className="flex items-center gap-1 min-w-[180px]">
+            <div
+              className="flex items-center gap-1 min-w-[180px]"
+              onClick={(e) => e.stopPropagation()}
+            >
               <input
                 autoFocus
                 value={editText}
@@ -210,10 +246,14 @@ const MessageBubble = ({
           )}
         </div>
 
-        <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0 relative">
+        <div
+          className={`transition-opacity flex items-center gap-0.5 shrink-0 relative ${
+            showActions ? "opacity-100" : "opacity-0 sm:group-hover:opacity-100"
+          }`}
+        >
           <button
             className="p-1 rounded-full hover:bg-secondary"
-            onClick={() => onReply?.(message)}
+            onClick={handleReplyClick}
             title="Reply"
           >
             <Reply className="h-4 w-4 text-muted-foreground" />
