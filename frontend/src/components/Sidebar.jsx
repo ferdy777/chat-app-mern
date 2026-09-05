@@ -80,6 +80,12 @@ const Sidebar = ({
   const [requests, setRequests] = useState([]);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  // Conversation ids where the other participant is currently typing to us,
+  // so the list preview can show "typing..." the way WhatsApp does, without
+  // needing that chat open. The server pushes userTyping/userStopTyping
+  // straight to our socket id (see socket/socket.js), so this works
+  // regardless of which conversation room we've joined.
+  const [typingConvoIds, setTypingConvoIds] = useState(new Set());
   const longPressTimer = useRef(null);
   // Set true the instant a long-press fires select mode. The header/search/
   // tabs collapse right away when that happens, shifting every row up — the
@@ -189,6 +195,52 @@ const Sidebar = ({
       socket.off("groupDeleted", handleConversationDeleted);
     };
   }, [socket, selectedConversation]);
+
+  // List-preview typing indicator. Kept separate from the effect above so
+  // it doesn't get torn down/re-subscribed every time selectedConversation
+  // changes. Also clears a conversation's typing flag when a message
+  // actually lands for it, as a safety net in case a stopTyping event gets
+  // dropped (socket hiccup, tab backgrounded mid-type, etc.).
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleTyping = ({ conversationId }) => {
+      setTypingConvoIds((prev) => {
+        if (prev.has(conversationId)) return prev;
+        const next = new Set(prev);
+        next.add(conversationId);
+        return next;
+      });
+    };
+
+    const handleStopTyping = ({ conversationId }) => {
+      setTypingConvoIds((prev) => {
+        if (!prev.has(conversationId)) return prev;
+        const next = new Set(prev);
+        next.delete(conversationId);
+        return next;
+      });
+    };
+
+    const handleNewMessage = (message) => {
+      setTypingConvoIds((prev) => {
+        if (!prev.has(message.conversation)) return prev;
+        const next = new Set(prev);
+        next.delete(message.conversation);
+        return next;
+      });
+    };
+
+    socket.on("userTyping", handleTyping);
+    socket.on("userStopTyping", handleStopTyping);
+    socket.on("newMessage", handleNewMessage);
+
+    return () => {
+      socket.off("userTyping", handleTyping);
+      socket.off("userStopTyping", handleStopTyping);
+      socket.off("newMessage", handleNewMessage);
+    };
+  }, [socket]);
 
   const getOtherParticipant = (conv) =>
     conv.isGroup ? null : conv.participants.find((p) => p._id !== authUser._id);
@@ -551,6 +603,7 @@ const Sidebar = ({
               const isOpen = selectedConversation?._id === conv._id;
               const isChecked = selectedIds.has(conv._id);
               const isWaitingReply = !conv.isGroup && conv.status === "pending";
+              const isTyping = typingConvoIds.has(conv._id);
 
               return (
                 <div
@@ -615,8 +668,14 @@ const Sidebar = ({
                       </div>
                     </div>
                     <div className="flex justify-between items-center gap-2">
-                      <p className="text-muted-foreground text-sm truncate">
-                        {isWaitingReply
+                      <p
+                        className={`text-sm truncate ${
+                          isTyping ? "text-primary" : "text-muted-foreground"
+                        }`}
+                      >
+                        {isTyping
+                          ? "typing..."
+                          : isWaitingReply
                           ? "Waiting for them to accept..."
                           : conv.lastMessage?.text || (conv.lastMessage?.image ? "📷 Photo" : "Say hi 👋")}
                       </p>
