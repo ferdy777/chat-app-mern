@@ -1,3 +1,4 @@
+// MessageBubble.jsx
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { format } from "date-fns";
@@ -27,6 +28,7 @@ const MessageBubble = ({
   onReply,
   onImageClick,
   onJumpToMessage,
+  onEditingChange,
 }) => {
   const [showReactions, setShowReactions] = useState(false);
   const [pickerPosition, setPickerPosition] = useState(null);
@@ -204,7 +206,13 @@ const MessageBubble = ({
   // Auto-grow the edit textarea to fit its content (up to a sane cap) so
   // the WHOLE message is visible while editing instead of a tiny one-line
   // box you had to scroll/drag through to see the rest of the text.
+  //
+  // Also tell the parent (ChatWindow) that we're editing so it can hold
+  // off its own "resize -> scroll to bottom" logic, and scroll THIS bubble
+  // into view ourselves instead of letting that logic carry the viewport
+  // down to the last message.
   useEffect(() => {
+    onEditingChange?.(isEditing);
     if (!isEditing) return;
     const ta = editTextareaRef.current;
     if (!ta) return;
@@ -212,7 +220,16 @@ const MessageBubble = ({
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     ta.focus();
     ta.selectionStart = ta.selectionEnd = ta.value.length;
+    bubbleRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditing]);
+
+  // Let the parent know editing has ended even if this bubble unmounts
+  // (e.g. message deleted by someone else mid-edit).
+  useEffect(() => {
+    return () => onEditingChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleEditTextChange = (e) => {
     setEditText(e.target.value);

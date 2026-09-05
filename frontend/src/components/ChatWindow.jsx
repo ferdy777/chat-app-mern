@@ -1,3 +1,4 @@
+// ChatWindow.jsx
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
@@ -41,6 +42,11 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const pageRef = useRef(1);
   const isNearBottomRef = useRef(true);
   const isInitialLoadRef = useRef(true);
+  // True while any message bubble is in edit mode. The edit textarea's
+  // auto-grow resizes the messages container, which would otherwise trip
+  // the ResizeObserver below into scrolling the whole view to the bottom
+  // mid-edit — this flag tells it to sit still instead.
+  const isEditingRef = useRef(false);
 
   const otherParticipant = conversation.isGroup
     ? null
@@ -257,6 +263,7 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         isInitialLoadRef.current = false;
         return;
       }
+      if (isEditingRef.current) return;
       if (isNearBottomRef.current) scrollToBottom("auto");
     });
     observer.observe(content);
@@ -566,6 +573,9 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
                 onReply={setReplyingTo}
                 onImageClick={setViewingImage}
                 onJumpToMessage={handleJumpToMessage}
+                onEditingChange={(editing) => {
+                  isEditingRef.current = editing;
+                }}
               />
             ))}
             {isOtherTyping && (
