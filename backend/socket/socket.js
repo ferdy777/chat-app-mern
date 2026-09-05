@@ -2,10 +2,27 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
-// Maps userId -> socketId (supports multiple tabs by storing an array, kept simple here as single socket)
+// Maps userId -> Set of socketIds. A user can be connected from more than
+// one device/tab at once (laptop open + phone open on the same account) —
+// storing just a single socketId meant the second device to connect
+// silently overwrote the first, so the first device stopped receiving any
+// real-time events (new chats, messages, accepted requests, etc.) until it
+// was manually refreshed.
 const userSocketMap = {};
 
 let io;
+
+function addSocket(userId, socketId) {
+  if (!userSocketMap[userId]) userSocketMap[userId] = new Set();
+  userSocketMap[userId].add(socketId);
+}
+
+function removeSocket(userId, socketId) {
+  userSocketMap[userId]?.delete(socketId);
+  if (userSocketMap[userId]?.size === 0) {
+    delete userSocketMap[userId];
+  }
+}
 
 function initSocket(server) {
   io = new Server(server, {
@@ -38,12 +55,17 @@ function initSocket(server) {
     const userId = socket.userId;
     console.log(`Socket connected: user ${userId} (${socket.id})`);
 
-    userSocketMap[userId] = socket.id;
+    const wasAlreadyOnline = !!userSocketMap[userId];
+    addSocket(userId, socket.id);
 
-    // Mark user online, reset any stale away/busy from their last session, tell everyone
-    await User.findByIdAndUpdate(userId, { isOnline: true, status: "online" });
+    // Only flip to "online" + reset away/busy on this user's FIRST active
+    // connection. If they're already connected elsewhere, leave their
+    // chosen status alone instead of stomping it every time a 2nd tab opens.
+    if (!wasAlreadyOnline) {
+      await User.findByIdAndUpdate(userId, { isOnline: true, status: "online" });
+      io.emit("userStatusChanged", { userId, status: "online" });
+    }
     io.emit("getOnlineUsers", Object.keys(userSocketMap));
-    io.emit("userStatusChanged", { userId, status: "online" });
 
     // Join a conversation "room" so events only go to participants
     socket.on("joinConversation", (conversationId) => {
@@ -60,44 +82,41 @@ function initSocket(server) {
       // message: { conversationId, receiverIds: [...], ...savedMessageDoc }
       const { conversationId, receiverIds = [] } = message;
 
-      // Emit to the room (covers group chats + multi-device)
+      // Emit to the room (covers group chats + multi-device joins)
       socket.to(conversationId).emit("newMessage", message);
 
-      // Also emit directly to each receiver's socket in case they haven't joined the room yet
+      // Also emit directly to every socket each receiver has open, in case
+      // they haven't joined the room yet (or have it open on another device).
       receiverIds.forEach((rId) => {
-        const receiverSocketId = userSocketMap[rId];
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("newMessage", message);
-        }
+        userSocketMap[rId]?.forEach((socketId) => {
+          io.to(socketId).emit("newMessage", message);
+        });
       });
     });
 
     // Typing indicators
     socket.on("typing", ({ conversationId, receiverIds = [] }) => {
       receiverIds.forEach((rId) => {
-        const receiverSocketId = userSocketMap[rId];
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("userTyping", { conversationId, userId });
-        }
+        userSocketMap[rId]?.forEach((socketId) => {
+          io.to(socketId).emit("userTyping", { conversationId, userId });
+        });
       });
     });
 
     socket.on("stopTyping", ({ conversationId, receiverIds = [] }) => {
       receiverIds.forEach((rId) => {
-        const receiverSocketId = userSocketMap[rId];
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("userStopTyping", { conversationId, userId });
-        }
+        userSocketMap[rId]?.forEach((socketId) => {
+          io.to(socketId).emit("userStopTyping", { conversationId, userId });
+        });
       });
     });
 
     // Read receipts (blue ticks)
     socket.on("messageRead", ({ conversationId, messageIds, readerId, receiverIds = [] }) => {
       receiverIds.forEach((rId) => {
-        const receiverSocketId = userSocketMap[rId];
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("messagesRead", { conversationId, messageIds, readerId });
-        }
+        userSocketMap[rId]?.forEach((socketId) => {
+          io.to(socketId).emit("messagesRead", { conversationId, messageIds, readerId });
+        });
       });
     });
 
@@ -109,15 +128,23 @@ function initSocket(server) {
     });
 
     socket.on("disconnect", async () => {
-      console.log(`Socket disconnected: user ${userId}`);
-      delete userSocketMap[userId];
-      await User.findByIdAndUpdate(userId, {
-        isOnline: false,
-        status: "offline",
-        lastSeen: new Date(),
-      });
+      console.log(`Socket disconnected: user ${userId} (${socket.id})`);
+      removeSocket(userId, socket.id);
+
+      const stillConnectedElsewhere = !!userSocketMap[userId];
       io.emit("getOnlineUsers", Object.keys(userSocketMap));
-      io.emit("userStatusChanged", { userId, status: "offline" });
+
+      // Only mark them offline once their LAST connection drops — otherwise
+      // closing one tab/device would wrongly show them offline everywhere,
+      // and would wipe presence for the device that's still open.
+      if (!stillConnectedElsewhere) {
+        await User.findByIdAndUpdate(userId, {
+          isOnline: false,
+          status: "offline",
+          lastSeen: new Date(),
+        });
+        io.emit("userStatusChanged", { userId, status: "offline" });
+      }
     });
   });
 
@@ -130,8 +157,8 @@ function parseCookie(cookieHeader, name) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-function getReceiverSocketId(userId) {
-  return userSocketMap[userId];
+function getReceiverSocketIds(userId) {
+  return userSocketMap[userId] ? Array.from(userSocketMap[userId]) : [];
 }
 
-module.exports = { initSocket, getReceiverSocketId, getIO: () => io };
+module.exports = { initSocket, getReceiverSocketIds, getIO: () => io };

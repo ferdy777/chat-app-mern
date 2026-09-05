@@ -81,6 +81,12 @@ const Sidebar = ({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const longPressTimer = useRef(null);
+  // Set true the instant a long-press fires select mode. The header/search/
+  // tabs collapse right away when that happens, shifting every row up — the
+  // "ghost click" browsers fire ~shortly after touchend then lands on
+  // whatever row ended up under that point, toggling a SECOND chat we never
+  // meant to touch. This flag lets us swallow that one stray click.
+  const suppressClickRef = useRef(false);
   const { authUser, logout } = useAuth();
   const { socket, onlineUsers, userStatuses, setMyStatus } = useSocket();
 
@@ -93,10 +99,7 @@ const Sidebar = ({
         console.error(err);
       }
     };
-    fetchConversations();
-  }, []);
 
-  useEffect(() => {
     const fetchRequests = async () => {
       try {
         const { data } = await api.get("/conversations/requests");
@@ -105,7 +108,28 @@ const Sidebar = ({
         console.error(err);
       }
     };
-    fetchRequests();
+
+    const refreshAll = () => {
+      fetchConversations();
+      fetchRequests();
+    };
+
+    refreshAll();
+
+    // Mobile browsers routinely suspend or fully kill a backgrounded tab.
+    // Re-pull both lists whenever we come back to the foreground so a chat
+    // created/accepted on another device (or a missed socket event) doesn't
+    // leave this sidebar stuck showing a stale list.
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshAll();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", refreshAll);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", refreshAll);
+    };
   }, []);
 
   useEffect(() => {
@@ -114,6 +138,20 @@ const Sidebar = ({
 
   useEffect(() => {
     if (!socket) return;
+
+    // A reconnect (after a dropped connection, network blip, etc.) can mean
+    // we missed events entirely — pull a fresh list whenever the socket
+    // (re)establishes so nothing stays silently out of sync.
+    const handleConnect = () => {
+      api
+        .get("/conversations")
+        .then(({ data }) => setConversations(data))
+        .catch((err) => console.error(err));
+      api
+        .get("/conversations/requests")
+        .then(({ data }) => setRequests(data))
+        .catch((err) => console.error(err));
+    };
 
     const handleNewRequest = (conversation) => {
       setRequests((prev) =>
@@ -137,12 +175,14 @@ const Sidebar = ({
       if (selectedConversation?._id === conversationId) setSelectedConversation(null);
     };
 
+    socket.on("connect", handleConnect);
     socket.on("newMessageRequest", handleNewRequest);
     socket.on("conversationRequestAccepted", handleRequestAccepted);
     socket.on("conversationDeleted", handleConversationDeleted);
     socket.on("groupDeleted", handleConversationDeleted);
 
     return () => {
+      socket.off("connect", handleConnect);
       socket.off("newMessageRequest", handleNewRequest);
       socket.off("conversationRequestAccepted", handleRequestAccepted);
       socket.off("conversationDeleted", handleConversationDeleted);
@@ -230,6 +270,12 @@ const Sidebar = ({
   };
 
   const handleItemClick = (conv) => {
+    // Swallow the one ghost click that follows a long-press-triggered
+    // select-mode entry — see suppressClickRef above.
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
     if (selectMode) {
       toggleSelect(conv._id);
     } else {
@@ -238,13 +284,25 @@ const Sidebar = ({
   };
 
   const handleLongPressStart = (convId) => {
-    longPressTimer.current = setTimeout(() => enterSelectMode(convId), LONG_PRESS_MS);
+    longPressTimer.current = setTimeout(() => {
+      suppressClickRef.current = true;
+      enterSelectMode(convId);
+    }, LONG_PRESS_MS);
   };
 
-  const handleLongPressEnd = () => {
+  const handleLongPressEnd = (e) => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
+    }
+    if (suppressClickRef.current) {
+      // Stops the browser's synthetic click from firing at all, on top of
+      // the handleItemClick guard above (belt and suspenders — some
+      // browsers still dispatch it regardless).
+      if (e?.cancelable) e.preventDefault();
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 400);
     }
   };
 

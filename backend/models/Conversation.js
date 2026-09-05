@@ -50,6 +50,17 @@ const conversationSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
+    // Per-user "high water mark" for deletes. When a user removes a 1:1
+    // chat, we record the timestamp here instead of touching any messages.
+    // Anything at/after that timestamp is hidden from THAT user only if the
+    // chat gets revived (they message again / accept a new request) — the
+    // other participant's view is completely unaffected.
+    clearedAt: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        at: { type: Date },
+      },
+    ],
   },
   { timestamps: true }
 );

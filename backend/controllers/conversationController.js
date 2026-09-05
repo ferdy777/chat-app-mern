@@ -1,6 +1,24 @@
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
-const { getIO, getReceiverSocketId } = require("../socket/socket");
+const { getIO, getReceiverSocketIds } = require("../socket/socket");
+
+// Hides a conversation's lastMessage in the response (not in the DB) if it
+// falls before this user's own "cleared" point — otherwise a deleted-then-
+// revived chat would show stale last-message text in the sidebar even
+// though the message list itself is correctly empty for that user.
+function maskClearedLastMessage(conversation, userId) {
+  const clearedEntry = conversation.clearedAt?.find(
+    (c) => c.user.toString() === userId.toString()
+  );
+  if (
+    clearedEntry &&
+    conversation.lastMessage &&
+    new Date(conversation.lastMessage.createdAt) <= new Date(clearedEntry.at)
+  ) {
+    conversation.lastMessage = null;
+  }
+  return conversation;
+}
 
 // @route POST /api/conversations
 // body: { receiverId } -> finds or creates a 1-on-1 conversation.
@@ -30,12 +48,15 @@ const accessConversation = async (req, res) => {
       conversation = await conversation.populate("participants", "-password");
 
       const io = getIO();
-      const receiverSocketId = getReceiverSocketId(receiverId);
-      if (io && receiverSocketId) {
-        io.to(receiverSocketId).emit("newMessageRequest", conversation);
+      if (io) {
+        getReceiverSocketIds(receiverId).forEach((socketId) => {
+          io.to(socketId).emit("newMessageRequest", conversation);
+        });
       }
     } else if (conversation.deletedFor?.some((id) => id.toString() === req.user._id.toString())) {
-      // Re-starting a chat you'd deleted un-hides it for you again.
+      // Re-starting a chat you'd deleted un-hides it for you again. It does
+      // NOT restore old messages — clearedAt (set on delete) keeps those
+      // hidden for you specifically; see getMessages.
       await Conversation.updateOne(
         { _id: conversation._id },
         { $pull: { deletedFor: req.user._id } }
@@ -44,6 +65,8 @@ const accessConversation = async (req, res) => {
         (id) => id.toString() !== req.user._id.toString()
       );
     }
+
+    conversation = maskClearedLastMessage(conversation, req.user._id);
 
     res.status(200).json(conversation);
   } catch (error) {
@@ -64,6 +87,11 @@ const getConversations = async (req, res) => {
       $or: [
         { isGroup: true },
         { status: "accepted" },
+        // Conversations created before the message-request feature existed
+        // have no `status` field at all in the DB. Mongo won't match those
+        // against `status: "accepted"`, so without this they silently drop
+        // out of the list until you re-open them via New Chat.
+        { status: { $exists: false } },
         { status: "pending", requestedBy: req.user._id },
       ],
     })
@@ -71,7 +99,9 @@ const getConversations = async (req, res) => {
       .populate("lastMessage")
       .sort({ updatedAt: -1 });
 
-    res.status(200).json(conversations);
+    const masked = conversations.map((c) => maskClearedLastMessage(c, req.user._id));
+
+    res.status(200).json(masked);
   } catch (error) {
     console.error("getConversations error:", error.message);
     res.status(500).json({ message: "Server error fetching conversations" });
@@ -121,8 +151,9 @@ const acceptRequest = async (req, res) => {
     const io = getIO();
     if (io) {
       conversation.participants.forEach((p) => {
-        const socketId = getReceiverSocketId(p._id.toString());
-        if (socketId) io.to(socketId).emit("conversationRequestAccepted", conversation);
+        getReceiverSocketIds(p._id.toString()).forEach((socketId) => {
+          io.to(socketId).emit("conversationRequestAccepted", conversation);
+        });
       });
     }
 
@@ -155,8 +186,9 @@ const declineRequest = async (req, res) => {
     const io = getIO();
     if (io) {
       participantIds.forEach((pId) => {
-        const socketId = getReceiverSocketId(pId);
-        if (socketId) io.to(socketId).emit("conversationDeleted", { conversationId });
+        getReceiverSocketIds(pId).forEach((socketId) => {
+          io.to(socketId).emit("conversationDeleted", { conversationId });
+        });
       });
     }
 
@@ -199,9 +231,10 @@ const createGroupConversation = async (req, res) => {
 // @route POST /api/conversations/:conversationId/remove
 // Unified "remove this chat" action, used both from the chat list
 // (long-press / right-click / multi-select) and from inside an open chat:
-//  - 1:1 conversation -> hidden from MY list only. The other participant
-//    keeps it, and it un-hides for me automatically if either of us
-//    messages again.
+//  - 1:1 conversation -> hidden from MY list only, and any messages up to
+//    now get "cleared" for me (clearedAt). The other participant keeps
+//    everything, and the chat un-hides for me automatically if either of
+//    us messages again — but old messages stay hidden for me specifically.
 //  - group, and I'm an admin -> deletes the group for everyone.
 //  - group, and I'm just a member -> leaves the group (promoting a new
 //    admin if I was the last one).
@@ -217,10 +250,14 @@ const removeChat = async (req, res) => {
     }
 
     if (!conversation.isGroup) {
-      await Conversation.updateOne(
-        { _id: conversationId },
-        { $addToSet: { deletedFor: req.user._id } }
+      conversation.deletedFor = Array.from(
+        new Set([...(conversation.deletedFor || []).map((id) => id.toString()), userId])
       );
+      conversation.clearedAt = (conversation.clearedAt || []).filter(
+        (c) => c.user.toString() !== userId
+      );
+      conversation.clearedAt.push({ user: req.user._id, at: new Date() });
+      await conversation.save();
       return res.status(200).json({ message: "Chat removed", mode: "hidden" });
     }
 
@@ -234,8 +271,9 @@ const removeChat = async (req, res) => {
       const io = getIO();
       if (io) {
         participantIds.forEach((pId) => {
-          const socketId = getReceiverSocketId(pId);
-          if (socketId) io.to(socketId).emit("groupDeleted", { conversationId });
+          getReceiverSocketIds(pId).forEach((socketId) => {
+            io.to(socketId).emit("groupDeleted", { conversationId });
+          });
         });
       }
       return res.status(200).json({ message: "Group deleted", mode: "deleted" });

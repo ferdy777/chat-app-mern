@@ -3,7 +3,7 @@ const Conversation = require("../models/Conversation");
 const cloudinary = require("../config/cloudinary");
 const User = require("../models/User");
 const { getBotReply, BOT_EMAIL } = require("../utils/seedBot");
-const { getIO, getReceiverSocketId } = require("../socket/socket");
+const { getIO, getReceiverSocketIds } = require("../socket/socket");
 const { sendPushToUser } = require("../utils/pushService");
 
 const sendMessage = async (req, res) => {
@@ -95,8 +95,8 @@ const sendMessage = async (req, res) => {
           { $push: { unreadCounts: { conversation: conversationId, count: 1 } } }
         );
 
-        const isOnlineSocket = getReceiverSocketId(participantId.toString());
-        if (!isOnlineSocket) {
+        const isOnlineAnywhere = getReceiverSocketIds(participantId.toString()).length > 0;
+        if (!isOnlineAnywhere) {
           sendPushToUser(participantId, {
             title: req.user.fullName || "New message",
             body: text ? text.slice(0, 120) : "Sent an image",
@@ -172,7 +172,19 @@ const getMessages = async (req, res) => {
       return res.status(403).json({ message: "Not a participant of this conversation" });
     }
 
-    const messages = await Message.find({ conversation: conversationId })
+    const query = { conversation: conversationId };
+
+    // If this user previously deleted this chat, hide messages from before
+    // that point so restarting it doesn't dump all the old history back on
+    // them. The other participant's view is untouched.
+    const clearedEntry = conversation.clearedAt?.find(
+      (c) => c.user.toString() === req.user._id.toString()
+    );
+    if (clearedEntry) {
+      query.createdAt = { $gt: clearedEntry.at };
+    }
+
+    const messages = await Message.find(query)
       .populate("sender", "-password")
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)

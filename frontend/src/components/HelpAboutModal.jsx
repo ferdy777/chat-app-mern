@@ -1,4 +1,4 @@
-import { Mail, Github, FileText } from "lucide-react";
+import { Mail, FileText } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -38,17 +38,6 @@ const HelpAboutModal = ({ onClose }) => {
             >
               <Mail className="h-4 w-4 text-muted-foreground" />
               <span>Contact support</span>
-            </a>
-
-            {/* View Source */}
-            <a
-              href="https://github.com/"
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-secondary text-sm text-foreground"
-            >
-              <Github className="h-4 w-4 text-muted-foreground" />
-              <span>View source</span>
             </a>
 
             {/* Terms & Privacy */}
