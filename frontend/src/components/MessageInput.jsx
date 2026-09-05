@@ -1,12 +1,12 @@
 import { useRef, useState, useEffect } from "react";
 import { BsEmojiSmile, BsPaperclip } from "react-icons/bs";
-import { Send } from "lucide-react";
+import { Send, X, ImageOff } from "lucide-react";
 import EmojiPicker from "emoji-picker-react";
 import { Button } from "@/components/ui/button";
 
 const TYPING_TIMER_LENGTH = 2000;
 
-const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
+const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput, replyingTo, onCancelReply }) => {
   const [text, setText] = useState("");
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -16,6 +16,7 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
   const isTypingRef = useRef(false);
   const emojiPickerRef = useRef(null);
   const emojiButtonRef = useRef(null);
+  const textInputRef = useRef(null);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -30,6 +31,11 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
     if (showEmojiPicker) document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showEmojiPicker]);
+
+  // Focus the text field the moment a reply is picked, same as WhatsApp.
+  useEffect(() => {
+    if (replyingTo) textInputRef.current?.focus();
+  }, [replyingTo]);
 
   const handleChange = (e) => {
     setText(e.target.value);
@@ -73,6 +79,13 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
 
     isTypingRef.current = false;
     onStopTyping();
+
+    // Belt-and-suspenders: onMouseDown on the Send button (below) already
+    // stops focus from leaving the input in the first place, but this
+    // covers submits triggered other ways (e.g. hitting Enter on desktop
+    // shouldn't need it, but some mobile keyboards' "send" action key can
+    // still momentarily blur the field).
+    textInputRef.current?.focus();
   };
 
   return (
@@ -80,6 +93,32 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
       className="bg-card border-t border-border px-2 sm:px-4 py-2 sm:py-3 relative shrink-0"
       style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
     >
+      {replyingTo && (
+        <div className="flex items-center justify-between bg-secondary/60 border-l-2 border-primary rounded-md px-3 py-2 mb-2">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-primary truncate">
+              Replying to {replyingTo.sender?.fullName || "message"}
+            </p>
+            <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+              {replyingTo.image ? (
+                <>
+                  <ImageOff className="h-3 w-3 shrink-0" /> Photo
+                </>
+              ) : (
+                replyingTo.text
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            className="shrink-0 p-1 rounded-full hover:bg-secondary ml-2"
+          >
+            <X className="h-4 w-4 text-muted-foreground" />
+          </button>
+        </div>
+      )}
+
       {imagePreview && (
         <div className="relative inline-block mb-2">
           <img src={imagePreview} alt="preview" className="h-24 rounded-md" />
@@ -115,6 +154,7 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
           <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImagePick} className="hidden" />
         </label>
         <input
+          ref={textInputRef}
           type="text"
           value={text}
           onChange={handleChange}
@@ -127,6 +167,14 @@ const MessageInput = ({ onSend, onTyping, onStopTyping, onFocusInput }) => {
           size="icon"
           className="rounded-full shrink-0 h-9 w-9 sm:h-10 sm:w-10 mr-0.5 sm:mr-0"
           disabled={!text.trim() && !imagePreview}
+          // The real fix: without this, tapping Send shifts focus to the
+          // button before the click/submit logic runs, and that focus
+          // shift is exactly what closes the mobile keyboard — forcing you
+          // to tap the text field again before every single message.
+          // Blocking the default mousedown/touch behavior keeps focus on
+          // the input the entire time, so the keyboard stays open and you
+          // can keep typing straight after sending.
+          onMouseDown={(e) => e.preventDefault()}
         >
           <Send className="h-4 w-4" />
         </Button>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
-import { MessageCircle, User, Users, X, ShieldOff, Shield, Trash2 } from "lucide-react";
+import { MessageCircle, User, Users, X, ShieldOff, Shield, Trash2, ArrowDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 import api from "../utils/axios";
@@ -16,16 +17,38 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+// How close to the top of the scroll container (in px) triggers loading
+// older messages.
+const LOAD_MORE_THRESHOLD = 80;
+// How far from the bottom (in px) counts as "not at the bottom" — controls
+// both the auto-stick-to-bottom behavior and the floating jump-down button.
+const NEAR_BOTTOM_THRESHOLD = 200;
+
 const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const [showContactProfile, setShowContactProfile] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [viewingImage, setViewingImage] = useState(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [unseenCount, setUnseenCount] = useState(0);
   const { authUser } = useAuth();
   const { socket, onlineUsers, userStatuses } = useSocket();
   const bottomRef = useRef(null);
   const messagesContentRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const pageRef = useRef(1);
+  // Mirrors showScrollToBottom but readable synchronously inside socket
+  // handlers, which close over stale state otherwise.
+  const isNearBottomRef = useRef(true);
+  // True only until the very first render of a freshly opened conversation
+  // has settled — used to tell "just opened this chat" apart from "user
+  // scrolled up", since both change scrollHeight.
+  const isInitialLoadRef = useRef(true);
 
   const otherParticipant = conversation.isGroup
     ? null
@@ -53,13 +76,24 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     bottomRef.current?.scrollIntoView({ behavior });
   };
 
+  const handleJumpToBottomClick = () => {
+    scrollToBottom("smooth");
+    setUnseenCount(0);
+  };
+
   useEffect(() => {
     const fetchMessages = async () => {
       setLoadingMessages(true);
+      pageRef.current = 1;
+      isInitialLoadRef.current = true;
+      setUnseenCount(0);
+      setShowScrollToBottom(false);
+      isNearBottomRef.current = true;
       try {
-        const { data } = await api.get(`/messages/${conversation._id}`);
-        setMessages(data);
-        markIncomingAsRead(data);
+        const { data } = await api.get(`/messages/${conversation._id}?page=1&limit=30`);
+        setMessages(data.messages);
+        setHasMore(data.hasMore);
+        markIncomingAsRead(data.messages);
       } catch (err) {
         console.error(err);
       } finally {
@@ -98,13 +132,74 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     }
   };
 
+  // Fetches the next page of OLDER messages and prepends them, keeping the
+  // user's current view pinned to the same message instead of yanking them
+  // to the top or bottom when new content is inserted above.
+  const loadOlderMessages = async () => {
+    if (loadingOlder || !hasMore) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    setLoadingOlder(true);
+    const previousScrollHeight = container.scrollHeight;
+    const nextPage = pageRef.current + 1;
+
+    try {
+      const { data } = await api.get(
+        `/messages/${conversation._id}?page=${nextPage}&limit=30`
+      );
+      setMessages((prev) => [...data.messages, ...prev]);
+      setHasMore(data.hasMore);
+      pageRef.current = nextPage;
+
+      requestAnimationFrame(() => {
+        const newScrollHeight = container.scrollHeight;
+        container.scrollTop = newScrollHeight - previousScrollHeight;
+      });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      if (container.scrollTop < LOAD_MORE_THRESHOLD) {
+        loadOlderMessages();
+      }
+
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const nearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+      isNearBottomRef.current = nearBottom;
+      setShowScrollToBottom(!nearBottom);
+      if (nearBottom) setUnseenCount(0);
+    };
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation._id, hasMore, loadingOlder]);
+
   useEffect(() => {
     if (!socket) return;
 
     const handleNewMessage = (message) => {
       if (message.conversation !== conversation._id) return;
       setMessages((prev) => (prev.some((m) => m._id === message._id) ? prev : [...prev, message]));
-      if (message.sender._id !== authUser._id) markIncomingAsRead([message]);
+      if (message.sender._id !== authUser._id) {
+        markIncomingAsRead([message]);
+        // If the user is scrolled up reading older messages, don't yank
+        // them down — instead let them know something new arrived via the
+        // floating jump-to-bottom button's badge.
+        if (!isNearBottomRef.current) {
+          setUnseenCount((prev) => prev + 1);
+        }
+      }
     };
 
     const handleMessagesRead = ({ conversationId, messageIds }) => {
@@ -166,26 +261,27 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     };
   }, [socket, conversation._id]);
 
-  // Single source of truth for "stay pinned to the bottom": watch the actual
-  // rendered height of the message list. This fires on new messages, on the
-  // typing indicator appearing/disappearing, AND on late-loading images
-  // resizing the layout (which is what was causing the scroll to land on
-  // the wrong message before) — so we don't need separate effects keyed off
-  // messages/isOtherTyping anymore.
+  // Auto-scroll-to-bottom on new content, but ONLY while we're not in the
+  // middle of loading older history — otherwise this would fight with
+  // loadOlderMessages' own scroll-position restore above.
   useEffect(() => {
     const content = messagesContentRef.current;
     if (!content) return;
     const observer = new ResizeObserver(() => {
-      scrollToBottom("auto");
+      if (loadingOlder) return;
+      if (isInitialLoadRef.current) {
+        scrollToBottom("auto");
+        isInitialLoadRef.current = false;
+        return;
+      }
+      // Only auto-stick to bottom if the user was already near the bottom —
+      // don't yank them down if they're reading older messages further up.
+      if (isNearBottomRef.current) scrollToBottom("auto");
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, []);
+  }, [loadingOlder]);
 
-  // Scroll to the last message once the mobile keyboard opens/closes
-  // (visualViewport resizing), since that changes the container's visible
-  // height rather than the content's height and won't trigger the
-  // ResizeObserver above.
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -210,9 +306,11 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         conversationId: conversation._id,
         text,
         imageBase64,
+        replyTo: replyingTo?._id,
       });
 
       setMessages((prev) => (prev.some((m) => m._id === savedMessage._id) ? prev : [...prev, savedMessage]));
+      setReplyingTo(null);
 
       socket?.emit("sendMessage", {
         ...savedMessage,
@@ -245,6 +343,16 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     setMessages((prev) =>
       prev.map((m) => (m._id === messageId ? { ...m, isDeleted: true, text: "", reactions: [] } : m))
     );
+  };
+
+  // Scrolls to and briefly highlights a message — used when tapping a
+  // quoted reply preview to jump to the original.
+  const handleJumpToMessage = (messageId) => {
+    const el = document.getElementById(`message-${messageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("flash-highlight");
+    setTimeout(() => el.classList.remove("flash-highlight"), 1500);
   };
 
   const emitTyping = () => socket?.emit("typing", { conversationId: conversation._id, receiverIds });
@@ -288,9 +396,6 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
     }
   };
 
-  // Unified remove action: hides a 1:1 chat for me only; deletes a group
-  // for everyone if I'm admin, or leaves it if I'm just a member. Same
-  // endpoint the sidebar's long-press/select-mode delete uses.
   const handleRemoveChat = async () => {
     const confirmMsg = conversation.isGroup
       ? isGroupAdmin
@@ -425,32 +530,57 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto chat-bg py-3 min-h-0">
-        <div ref={messagesContentRef}>
-          {!loadingMessages && messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-              <MessageCircle className="w-10 h-10 mb-3" />
-              <p className="text-sm">No messages yet. Say hi 👋</p>
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto chat-bg py-3">
+          {loadingOlder && (
+            <div className="flex justify-center py-2">
+              <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
           )}
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg._id}
-              message={msg}
-              isOwn={msg.sender._id === authUser._id}
-              onUpdated={handleMessageUpdated}
-              onDeleted={handleMessageDeletedLocal}
-            />
-          ))}
-          {isOtherTyping && (
-            <div className="px-4 py-1">
-              <div className="bg-wa-bubbleIn text-muted-foreground text-xs inline-block px-3 py-2 rounded-lg">
-                typing...
+          <div ref={messagesContentRef}>
+            {!loadingMessages && messages.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                <MessageCircle className="w-10 h-10 mb-3" />
+                <p className="text-sm">No messages yet. Say hi 👋</p>
               </div>
-            </div>
-          )}
+            )}
+            {messages.map((msg) => (
+              <MessageBubble
+                key={msg._id}
+                message={msg}
+                isOwn={msg.sender._id === authUser._id}
+                onUpdated={handleMessageUpdated}
+                onDeleted={handleMessageDeletedLocal}
+                onReply={setReplyingTo}
+                onImageClick={setViewingImage}
+                onJumpToMessage={handleJumpToMessage}
+              />
+            ))}
+            {isOtherTyping && (
+              <div className="px-4 py-1">
+                <div className="bg-wa-bubbleIn text-muted-foreground text-xs inline-block px-3 py-2 rounded-lg">
+                  typing...
+                </div>
+              </div>
+            )}
+          </div>
+          <div ref={bottomRef} />
         </div>
-        <div ref={bottomRef} />
+
+        {showScrollToBottom && (
+          <button
+            onClick={handleJumpToBottomClick}
+            className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 bg-card border border-border shadow-lg rounded-full p-2.5 hover:bg-secondary transition-colors z-10"
+            title="Jump to latest message"
+          >
+            <ArrowDown className="h-5 w-5 text-foreground" />
+            {unseenCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-primary text-primary-foreground text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                {unseenCount > 9 ? "9+" : unseenCount}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {isBlocked ? (
@@ -493,6 +623,8 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
             onTyping={emitTyping}
             onStopTyping={emitStopTyping}
             onFocusInput={handleInputFocus}
+            replyingTo={replyingTo}
+            onCancelReply={() => setReplyingTo(null)}
           />
         </>
       )}
@@ -506,6 +638,28 @@ const ChatWindow = ({ conversation, setConversations, onBack, onClose }) => {
           onClose={() => setShowContactProfile(false)}
         />
       )}
+
+      {viewingImage &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
+            onClick={() => setViewingImage(null)}
+          >
+            <button
+              className="absolute top-4 right-4 z-[101] bg-black/50 hover:bg-black/70 rounded-full p-2 text-white"
+              onClick={() => setViewingImage(null)}
+            >
+              <X className="h-6 w-6" />
+            </button>
+            <img
+              src={viewingImage}
+              alt="Full size attachment"
+              className="max-w-full max-h-full rounded-lg object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

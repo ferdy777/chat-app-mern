@@ -117,3 +117,11 @@
   background-image: var(--chat-pattern);
   transition: background-color 0.2s ease;
 }
+
+.flash-highlight {
+  animation: flash-highlight-anim 1.5s ease-out;
+}
+@keyframes flash-highlight-anim {
+  0% { background-color: rgba(0, 168, 132, 0.25); }
+  100% { background-color: transparent; }
+}

@@ -19,6 +19,14 @@ const messageSchema = new mongoose.Schema(
     image: {
       type: String,
     },
+    // The message this one is replying to (WhatsApp-style quote-reply).
+    // Kept even if the original gets deleted later — deleteMessage below
+    // blanks the original's own text/image but leaves it as a document,
+    // so the quoted preview can still show "This message was deleted".
+    replyTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Message",
+    },
     status: {
       type: String,
       enum: ["sent", "delivered", "read"],

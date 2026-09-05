@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { format } from "date-fns";
 import { BsCheck, BsCheckAll } from "react-icons/bs";
-import { SmilePlus, MoreVertical, Pencil, Trash2, X, Check } from "lucide-react";
+import { SmilePlus, MoreVertical, Pencil, Trash2, X, Check, Reply, ImageOff } from "lucide-react";
 import EmojiPicker from "emoji-picker-react";
 import api from "../utils/axios";
 import {
@@ -16,7 +16,15 @@ const PICKER_WIDTH = 300;
 const PICKER_HEIGHT = 400;
 const VIEWPORT_MARGIN = 8;
 
-const MessageBubble = ({ message, isOwn, onUpdated, onDeleted }) => {
+const MessageBubble = ({
+  message,
+  isOwn,
+  onUpdated,
+  onDeleted,
+  onReply,
+  onImageClick,
+  onJumpToMessage,
+}) => {
   const [showReactions, setShowReactions] = useState(false);
   const [pickerPosition, setPickerPosition] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -103,7 +111,10 @@ const MessageBubble = ({ message, isOwn, onUpdated, onDeleted }) => {
 
   if (message.isDeleted) {
     return (
-      <div className={`flex ${isOwn ? "justify-end" : "justify-start"} px-4 py-0.5`}>
+      <div
+        id={`message-${message._id}`}
+        className={`flex ${isOwn ? "justify-end" : "justify-start"} px-4 py-0.5`}
+      >
         <div className="max-w-[85%] sm:max-w-[65%] rounded-lg px-3 py-2 bg-muted/50 italic text-muted-foreground text-sm">
           This message was deleted
         </div>
@@ -111,8 +122,11 @@ const MessageBubble = ({ message, isOwn, onUpdated, onDeleted }) => {
     );
   }
 
+  const reply = message.replyTo;
+
   return (
     <div
+      id={`message-${message._id}`}
       className={`group flex ${isOwn ? "justify-end" : "justify-start"} px-4 py-0.5 ${
         hasReactions ? "mb-2.5" : ""
       }`}
@@ -123,8 +137,36 @@ const MessageBubble = ({ message, isOwn, onUpdated, onDeleted }) => {
             isOwn ? "bg-wa-bubbleOut" : "bg-wa-bubbleIn"
           }`}
         >
+          {reply && (
+            <button
+              type="button"
+              onClick={() => onJumpToMessage?.(reply._id)}
+              className="block w-full text-left mb-1.5 pl-2 border-l-2 border-primary/70 bg-black/10 dark:bg-white/5 rounded-r px-2 py-1"
+            >
+              <p className="text-xs font-medium text-primary truncate">
+                {reply.sender?.fullName || "Unknown"}
+              </p>
+              <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                {reply.isDeleted ? (
+                  "This message was deleted"
+                ) : reply.image ? (
+                  <>
+                    <ImageOff className="h-3 w-3 shrink-0" /> Photo
+                  </>
+                ) : (
+                  reply.text
+                )}
+              </p>
+            </button>
+          )}
+
           {message.image && (
-            <img src={message.image} alt="attachment" className="rounded-md mb-1 max-h-64 object-cover" />
+            <img
+              src={message.image}
+              alt="attachment"
+              className="rounded-md mb-1 max-h-64 object-cover cursor-pointer"
+              onClick={() => onImageClick?.(message.image)}
+            />
           )}
 
           {isEditing ? (
@@ -168,7 +210,15 @@ const MessageBubble = ({ message, isOwn, onUpdated, onDeleted }) => {
           )}
         </div>
 
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0 relative">
+        <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0 relative">
+          <button
+            className="p-1 rounded-full hover:bg-secondary"
+            onClick={() => onReply?.(message)}
+            title="Reply"
+          >
+            <Reply className="h-4 w-4 text-muted-foreground" />
+          </button>
+
           <button
             ref={reactionButtonRef}
             className="p-1 rounded-full hover:bg-secondary"

@@ -6,9 +6,17 @@ const { getBotReply, BOT_EMAIL } = require("../utils/seedBot");
 const { getIO, getReceiverSocketIds } = require("../socket/socket");
 const { sendPushToUser } = require("../utils/pushService");
 
+// Shared populate shape for a message's quoted reply — kept minimal so we're
+// not dragging a full nested user doc along on every single message.
+const REPLY_POPULATE = {
+  path: "replyTo",
+  select: "text image isDeleted sender",
+  populate: { path: "sender", select: "fullName" },
+};
+
 const sendMessage = async (req, res) => {
   try {
-    const { conversationId, text, imageBase64 } = req.body;
+    const { conversationId, text, imageBase64, replyTo } = req.body;
 
     if (!conversationId || (!text && !imageBase64)) {
       return res.status(400).json({ message: "conversationId and text or image are required" });
@@ -55,6 +63,14 @@ const sendMessage = async (req, res) => {
       });
     }
 
+    // Only accept a replyTo that's actually a message in THIS conversation —
+    // otherwise someone could quote a message from a chat they're not in.
+    let validReplyTo;
+    if (replyTo) {
+      const original = await Message.findOne({ _id: replyTo, conversation: conversationId });
+      if (original) validReplyTo = original._id;
+    }
+
     let imageUrl;
     if (imageBase64) {
       const uploadRes = await cloudinary.uploader.upload(imageBase64, {
@@ -68,6 +84,7 @@ const sendMessage = async (req, res) => {
       sender: req.user._id,
       text,
       image: imageUrl,
+      replyTo: validReplyTo,
     });
 
     conversation.lastMessage = message._id;
@@ -75,7 +92,10 @@ const sendMessage = async (req, res) => {
     conversation.deletedFor = [];
     await conversation.save();
 
-    const populatedMessage = await message.populate("sender", "-password");
+    const populatedMessage = await message.populate([
+      { path: "sender", select: "-password" },
+      REPLY_POPULATE,
+    ]);
 
     res.status(201).json(populatedMessage);
 
@@ -184,13 +204,20 @@ const getMessages = async (req, res) => {
       query.createdAt = { $gt: clearedEntry.at };
     }
 
+    const totalCount = await Message.countDocuments(query);
+
     const messages = await Message.find(query)
       .populate("sender", "-password")
+      .populate(REPLY_POPULATE)
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
-    res.status(200).json(messages.reverse());
+    // Tell the client whether there's anything older left to page in, so it
+    // knows when to stop firing "load more" requests on scroll-to-top.
+    const hasMore = page * limit < totalCount;
+
+    res.status(200).json({ messages: messages.reverse(), hasMore });
   } catch (error) {
     console.error("getMessages error:", error.message);
     res.status(500).json({ message: "Server error fetching messages" });
@@ -254,7 +281,10 @@ const editMessage = async (req, res) => {
     message.isEdited = true;
     await message.save();
 
-    const populated = await message.populate("sender", "-password");
+    const populated = await message.populate([
+      { path: "sender", select: "-password" },
+      REPLY_POPULATE,
+    ]);
 
     const io = getIO();
     if (io) io.to(message.conversation.toString()).emit("messageEdited", populated);
@@ -320,7 +350,10 @@ const reactToMessage = async (req, res) => {
     }
 
     await message.save();
-    const populated = await message.populate("sender", "-password");
+    const populated = await message.populate([
+      { path: "sender", select: "-password" },
+      REPLY_POPULATE,
+    ]);
 
     const io = getIO();
     if (io) io.to(message.conversation.toString()).emit("messageReacted", populated);
